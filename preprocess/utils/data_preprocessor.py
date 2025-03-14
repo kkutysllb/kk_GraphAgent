@@ -12,7 +12,7 @@ import pandas as pd
 import hashlib
 import json
 import os
-from graph_rag.utils.logger import Logger
+from utils.logger import Logger
 from datetime import datetime
 from collections import defaultdict
 
@@ -53,16 +53,6 @@ class ResourcePreprocessor:
             'TRU': 'STORAGE',      # 存储类型
         }
         
-        # 定义默认容量映射
-        self.capacity_mapping = {
-            'DC': 1000.0,
-            'TENANT': 100.0,
-            'NE': 50.0,
-            'VM': 10.0,
-            'HOST': 20.0,
-            'HA': 15.0,
-            'TRU': 30.0
-        }
         
     def _generate_dc_id(self):
         """生成全局唯一的DC ID"""
@@ -323,8 +313,6 @@ class ResourcePreprocessor:
             'layer': layer,  # 层级数值（0-6）
             'layer_type': node_type,  # 层级类型（DC/TENANT/NE等）
             'business_type': business_type,  # 业务类型（BUSINESS/COMPUTE/STORAGE）
-            'capacity': self.capacity_mapping.get(node_type, 0.0),
-            'timestamp': datetime.now().isoformat()
         }
         
         # 添加其他属性
@@ -743,7 +731,6 @@ class ResourcePreprocessor:
                     'weight': weight,
                     'source_type': self.resource_type_mapping.get(source_type, 'UNKNOWN'),
                     'target_type': self.resource_type_mapping.get(target_type, 'UNKNOWN'),
-                    'timestamp': datetime.now().isoformat()
                 }
             }
         except Exception as e:

@@ -22,9 +22,8 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
-.env
+ENV/
 
 # IDE
 .idea/
@@ -32,17 +31,52 @@ env/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model files and checkpoints
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.bin
+
+# Vector indices
+indices/
+*.index
+*.ivfdata
+
+# Features and intermediate files
+features/
+*.npy
+*.npz
+*.pkl
+*.h5
 
 # Logs
-*.log 
+logs/
+*.log
 
-# data
+# Local development
+.env
+.env.local
+.env.*.local
+
+# Large data files
+*.csv
 *.json
+*.jsonl
+*.parquet
+*.arrow
+*.db
+*.sqlite
+*.sqlite3
+
+# Neo4j
+data/databases/
+data/transactions/
+*.dump
+
+# OS
+.DS_Store
+Thumbs.db

@@ -10,14 +10,10 @@
 """
 
 import json
-from datetime import datetime
-
 from typing import Dict, List, Tuple, Any, Optional
 from neo4j import GraphDatabase
-from graph_rag.utils.logger import Logger
-from graph_rag.utils.config import Config
-
-
+from utils.logger import Logger
+from tqdm import tqdm
 
 class Neo4jGraphManager:
     """Neo4j图数据库管理器
@@ -33,28 +29,20 @@ class Neo4jGraphManager:
     5. 查询结果处理
     """
     
-    def __init__(self, uri: str = None, user: str = None, password: str = None):
+    def __init__(self, uri: str, user: str, password: str, batch_size: int = 100):
         """初始化Neo4j图数据库管理器
         
         Args:
-            uri: Neo4j数据库URI，如果为None则从配置文件读取
-            user: Neo4j用户名，如果为None则从配置文件读取
-            password: Neo4j密码，如果为None则从配置文件读取
+            uri: Neo4j数据库URI
+            user: Neo4j用户名
+            password: Neo4j密码
+            batch_size: 批量导入的大小
         """
         self.logger = Logger(self.__class__.__name__)
-        
-        # 获取配置实例
-        self.config = Config.get_instance()
-        
-        # 获取数据库连接参数
-        neo4j_config = self.config.get('neo4j', {})
-        self.uri = uri or neo4j_config.get('uri', 'bolt://localhost:7687')
-        self.user = user or neo4j_config.get('user', 'neo4j')
-        self.password = password or neo4j_config.get('password', 'Oms_2600a')
-        
-        self.logger.info(f"初始化Neo4j图数据库管理器，URI: {self.uri}")
-        
-        # 初始化驱动
+        self.uri = uri
+        self.user = user
+        self.password = password
+        self.batch_size = batch_size
         self._driver = None
         self.connect()
     
@@ -63,10 +51,8 @@ class Neo4jGraphManager:
         try:
             self._driver = GraphDatabase.driver(
                 self.uri,
-                auth=(self.user, self.password),
-                max_connection_lifetime=30
+                auth=(self.user, self.password)
             )
-            # 验证连接
             with self._driver.session() as session:
                 result = session.run("MATCH (n) RETURN count(n) as count")
                 count = result.single()["count"]
@@ -81,148 +67,166 @@ class Neo4jGraphManager:
             self._driver.close()
             self.logger.info("已关闭Neo4j数据库连接")
     
-    def import_graph_data(self, graph_data_path: str, clear_existing: bool = False) -> bool:
-        """导入图数据到Neo4j
-        
-        Args:
-            graph_data_path: 图数据文件路径
-            clear_existing: 是否清除现有数据
-            
-        Returns:
-            是否成功导入
-        """
+    def _create_indexes(self, session):
+        """创建所需的索引"""
+        self.logger.info("创建索引...")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:BUSINESS) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:COMPUTE) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:STORAGE) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:DC) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:TENANT) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:NE) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:VM) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:HOST) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:HA) ON (n.id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (n:TRU) ON (n.id)")
+    
+    def _execute_node_batch(self, session, batch):
+        """执行节点批量导入"""
         try:
-            self.logger.info(f"正在导入图数据: {graph_data_path}")
+            for node in batch:
+                node_type = node["type"]
+                node_data = {
+                    "id": node["id"],
+                    "type": node["type"],
+                    "attributes": node.get("attributes", {}),
+                    "metrics_data": json.dumps(node.get("metrics", {})) if node.get("metrics") else None,
+                    "log_data": json.dumps(node.get("logs", {})) if node.get("logs") else None
+                }
+                
+                query = f"""
+                MERGE (n:{node_type} {{id: $id}})
+                SET n.type = $type
+                SET n += $attributes
+                SET n.metrics_data = $metrics_data
+                SET n.log_data = $log_data
+                """
+                
+                session.run(query, node_data)
+        except Exception as e:
+            self.logger.error(f"批量导入节点失败: {str(e)}")
+            if batch:
+                self.logger.error(f"示例节点数据: {json.dumps(batch[0], indent=2)}")
+            raise
+
+    def _batch_import_nodes(self, session, nodes):
+        """批量导入节点"""
+        node_count = 0
+        batch = []
+        
+        for node in tqdm(nodes, desc="导入节点"):
+            if not isinstance(node, dict) or "id" not in node or "type" not in node:
+                self.logger.warning(f"跳过无效节点: {node}")
+                continue
+            batch.append(node)
             
+            if len(batch) >= self.batch_size:
+                self._execute_node_batch(session, batch)
+                node_count += len(batch)
+                batch = []
+        
+        if batch:
+            self._execute_node_batch(session, batch)
+            node_count += len(batch)
+        
+        return node_count
+    
+    def _execute_edge_batch(self, session, batch):
+        """执行边批量导入"""
+        try:
+            for edge in batch:
+                edge_type = edge["type"]
+                edge_data = {
+                    "source": edge["source"],
+                    "target": edge["target"],
+                    "attributes": edge.get("attributes", {}),
+                    "dynamics_data": json.dumps(edge.get("dynamics", {})) if edge.get("dynamics") else None
+                }
+                
+                query = f"""
+                MATCH (source {{id: $source}})
+                MATCH (target {{id: $target}})
+                MERGE (source)-[r:`{edge_type}`]->(target)
+                SET r = $attributes
+                SET r.dynamics_data = $dynamics_data
+                """
+                
+                session.run(query, edge_data)
+        except Exception as e:
+            self.logger.error(f"批量导入边失败: {str(e)}")
+            if batch:
+                self.logger.error(f"示例边数据: {json.dumps(batch[0], indent=2)}")
+            raise
+
+    def _batch_import_edges(self, session, edges):
+        """批量导入边"""
+        edge_count = 0
+        batch = []
+        
+        for edge in tqdm(edges, desc="导入边"):
+            if not isinstance(edge, dict) or "source" not in edge or "target" not in edge or "type" not in edge:
+                self.logger.warning(f"跳过无效边: {edge}")
+                continue
+            batch.append(edge)
+            
+            if len(batch) >= self.batch_size:
+                self._execute_edge_batch(session, batch)
+                edge_count += len(batch)
+                batch = []
+        
+        if batch:
+            self._execute_edge_batch(session, batch)
+            edge_count += len(batch)
+        
+        return edge_count
+    
+    def import_graph_data(self, graph_data_path: str, clear_existing: bool = False) -> bool:
+        """导入图数据到Neo4j"""
+        try:
             # 读取图数据
-            with open(graph_data_path, 'r', encoding='utf-8') as f:
+            with open(graph_data_path, 'r') as f:
                 graph_data = json.load(f)
             
             nodes = graph_data.get("nodes", [])
             edges = graph_data.get("edges", [])
             
-            self.logger.info(f"读取到 {len(nodes)} 个节点和 {len(edges)} 条边")
+            self.logger.info(f"从 {graph_data_path} 读取图数据")
+            self.logger.info(f"节点数量: {len(nodes)}")
+            self.logger.info(f"边数量: {len(edges)}")
             
             with self._driver.session() as session:
                 # 清除现有数据
                 if clear_existing:
-                    self.logger.info("清除现有数据")
+                    self.logger.info("清除现有数据...")
                     session.run("MATCH (n) DETACH DELETE n")
                 
-                # 导入节点
-                self.logger.info("正在导入节点...")
-                node_count = 0
-                for node in nodes:
-                    node_id = node.get("id")
-                    layer_type = node.get("type")  # 层级类型（如DC/TENANT/NE等）
-                    attributes = node.get("attributes", {})
-                    business_type = attributes.get("business_type")  # 业务类型（BUSINESS/COMPUTE/STORAGE）
-                    
-                    # 处理动态数据
-                    metrics = node.get("metrics", {}).get("metrics_data", {}).get(node_id, [])
-                    logs = node.get("logs", {}).get("log_data", {}).get(node_id, [])
-                    
-                    # 跳过无效节点
-                    if not node_id or not layer_type or not business_type:
-                        self.logger.warning(f"跳过无效节点: {node}")
-                        continue
-                    
-                    # 构建节点属性，将复杂对象序列化为JSON字符串
-                    node_props = {
-                        "id": node_id,
-                        "name": attributes.get("name"),
-                        "layer": attributes.get("layer"),
-                        "layer_type": attributes.get("layer_type"),
-                        "business_type": attributes.get("business_type"),
-                        "capacity": attributes.get("capacity"),
-                        "timestamp": attributes.get("timestamp"),
-                        "metrics_data": json.dumps(metrics) if metrics else None,
-                        "logs_data": json.dumps(logs) if logs else None,
-                        "last_update": datetime.now().isoformat()
-                    }
-                    
-                    # 构建Cypher查询，同时使用业务类型和层级类型作为标签
-                    query = """
-                    MERGE (n:{business_type}:{layer_type} {{id: $props.id}})
-                    SET n = $props
-                    RETURN n
-                    """.format(business_type=business_type, layer_type=layer_type)
-                    
-                    session.run(query, props=node_props)
-                    node_count += 1
+                # 创建索引
+                self._create_indexes(session)
                 
+                # 导入节点
+                node_count = self._batch_import_nodes(session, nodes)
                 self.logger.info(f"成功导入 {node_count} 个节点")
                 
                 # 导入边
-                self.logger.info("正在导入边...")
-                edge_count = 0
-                skipped_edges = 0
-                for edge in edges:
-                    source = edge.get("source")
-                    target = edge.get("target")
-                    edge_type = edge.get("type", "CONNECTS_TO")
-                    attributes = edge.get("attributes", {})
-                    
-                    # 处理边的动态数据
-                    dynamics = edge.get("dynamics", {})
-                    
-                    # 跳过无效边
-                    if not source or not target:
-                        self.logger.warning(f"跳过无效边 (缺少源/目标): {edge}")
-                        skipped_edges += 1
-                        continue
-                    
-                    try:
-                        # 构建边属性，将复杂对象序列化为JSON字符串
-                        edge_props = {
-                            "weight": attributes.get("weight"),
-                            "source_type": attributes.get("source_type"),
-                            "target_type": attributes.get("target_type"),
-                            "timestamp": attributes.get("timestamp"),
-                            "dynamics_data": json.dumps(dynamics) if dynamics else None,
-                            "last_update": datetime.now().isoformat()
-                        }
-                        
-                        # 构建Cypher查询
-                        query = """
-                        MATCH (source {{id: $source}})
-                        MATCH (target {{id: $target}})
-                        MERGE (source)-[r:{edge_type}]->(target)
-                        SET r = $props
-                        RETURN r
-                        """.format(edge_type=edge_type)
-                        
-                        session.run(query, source=source, target=target, props=edge_props)
-                        edge_count += 1
-                    except Exception as e:
-                        self.logger.warning(f"导入边失败: 源={source}, 目标={target}, 错误={str(e)}")
-                        skipped_edges += 1
+                edge_count = self._batch_import_edges(session, edges)
+                self.logger.info(f"成功导入 {edge_count} 条边")
                 
-                self.logger.info(f"成功导入 {edge_count} 条边, 跳过 {skipped_edges} 条无效边")
+                # 验证导入结果
+                result = session.run("MATCH (n) RETURN count(n) as node_count")
+                actual_node_count = result.single()["node_count"]
                 
-                # 创建索引
-                self.logger.info("正在创建索引...")
-                # 为业务类型创建索引
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:BUSINESS) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:COMPUTE) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:STORAGE) ON (n.id)")
-                # 为层级类型创建索引
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:DC) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:TENANT) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:NE) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:VM) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:HOST) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:HA) ON (n.id)")
-                session.run("CREATE INDEX IF NOT EXISTS FOR (n:TRU) ON (n.id)")
+                result = session.run("MATCH ()-[r]->() RETURN count(r) as edge_count")
+                actual_edge_count = result.single()["edge_count"]
                 
-                self.logger.info("图数据导入完成")
-                return True
+                self.logger.info(f"验证结果:")
+                self.logger.info(f"实际节点数量: {actual_node_count}")
+                self.logger.info(f"实际边数量: {actual_edge_count}")
                 
+            return True
+            
         except Exception as e:
             self.logger.error(f"导入图数据失败: {str(e)}")
             return False
-        finally:
-            self.close()
     
     def execute_cypher_query(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
         """执行Cypher查询并返回结果
@@ -234,16 +238,13 @@ class Neo4jGraphManager:
         Returns:
             查询结果列表
         """
-        # 清理查询语句
-        query = self._clean_query(query)
-        
-        with self._driver.session() as session:
-            try:
+        try:
+            with self._driver.session() as session:
                 result = session.run(query, params or {})
                 return [dict(record) for record in result]
-            except Exception as e:
-                self.logger.error(f"执行Cypher查询失败: {str(e)}")
-                raise
+        except Exception as e:
+            self.logger.error(f"执行Cypher查询失败: {str(e)}")
+            raise
 
     def _clean_query(self, query: str) -> str:
         """清理查询语句，移除不必要的格式和确保语法正确

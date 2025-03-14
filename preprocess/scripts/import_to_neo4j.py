@@ -17,8 +17,8 @@ import argparse
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(root_dir)
 
-from graph_rag.utils.neo4j_graph_manager import Neo4jGraphManager
-from graph_rag.utils.logger import Logger
+from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
+from utils.logger import Logger
 
 
 def main():
@@ -41,17 +41,26 @@ def main():
     parser.add_argument(
         "--uri", 
         type=str, 
-        help="Neo4j数据库URI，如果不指定则从配置文件读取"
+        default="bolt://localhost:7687",
+        help="Neo4j数据库URI"
     )
     parser.add_argument(
         "--user", 
         type=str, 
-        help="Neo4j用户名，如果不指定则从配置文件读取"
+        default="neo4j",
+        help="Neo4j用户名"
     )
     parser.add_argument(
         "--password", 
         type=str, 
-        help="Neo4j密码，如果不指定则从配置文件读取"
+        default="Oms_2600a",
+        help="Neo4j密码"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1000,
+        help="批量导入的大小"
     )
     
     args = parser.parse_args()
@@ -70,21 +79,25 @@ def main():
     neo4j_manager = Neo4jGraphManager(
         uri=args.uri,
         user=args.user,
-        password=args.password
+        password=args.password,
+        batch_size=args.batch_size
     )
     
-    # 导入图数据
-    success = neo4j_manager.import_graph_data(
-        graph_data_path=graph_data_path,
-        clear_existing=args.clear
-    )
-    
-    if success:
-        logger.info("图数据导入成功")
-        return 0
-    else:
-        logger.error("图数据导入失败")
-        return 1
+    try:
+        # 导入图数据
+        success = neo4j_manager.import_graph_data(
+            graph_data_path=graph_data_path,
+            clear_existing=args.clear
+        )
+        
+        if success:
+            logger.info("图数据导入成功")
+            return 0
+        else:
+            logger.error("图数据导入失败")
+            return 1
+    finally:
+        neo4j_manager.close()
 
 
 if __name__ == "__main__":

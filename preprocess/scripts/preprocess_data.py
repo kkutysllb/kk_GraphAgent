@@ -22,10 +22,10 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.append(ROOT_DIR)
 
 import yaml
-from graph_rag.utils.data_preprocessor import ResourcePreprocessor
-from graph_rag.utils.metrics_generator import MetricsGenerator
-from graph_rag.utils.log_generator import LogGenerator
-from graph_rag.utils.edge_dynamics_generator import EdgeDynamicsGenerator
+from preprocess.utils.data_preprocessor import ResourcePreprocessor
+from preprocess.utils.metrics_generator import MetricsGenerator
+from preprocess.utils.log_generator import LogGenerator
+from preprocess.utils.edge_dynamics_generator import EdgeDynamicsGenerator
 
 def main():
     parser = argparse.ArgumentParser(description='Process resource topology data and generate graph data')
