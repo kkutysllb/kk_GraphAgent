@@ -73,9 +73,18 @@ logs/
 *.sqlite3
 
 # Neo4j
-data/databases/
-data/transactions/
+neo4j/data/
+neo4j/logs/
+neo4j/import/
+neo4j/plugins/
+*.db
+database_lock
+store_lock
+neostore*
+*.id
 *.dump
+checkpoint.*
+transaction.db.*
 
 # OS
 .DS_Store
