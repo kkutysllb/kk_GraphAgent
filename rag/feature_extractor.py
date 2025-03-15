@@ -11,16 +11,14 @@
 
 import json
 from typing import Dict, List, Any, Optional
-from neo4j import GraphDatabase
 import numpy as np
-from datetime import datetime
 import logging
 from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
 
 logger = logging.getLogger(__name__)
 
 class FeatureExtractor:
-    """Extract features from Neo4j database based on real data structure"""
+    """从Neo4j数据库中提取基于真实数据结构的特征"""
     
     def __init__(
         self,
@@ -29,16 +27,16 @@ class FeatureExtractor:
         relationship_types: Optional[List[str]] = None
     ):
         """
-        Initialize feature extractor
+        初始化特征提取器
         
         Args:
-            graph_manager: Neo4j graph manager instance
-            node_types: List of node types to extract features from
-            relationship_types: List of relationship types to extract features from
+            graph_manager: Neo4j图管理器实例
+            node_types: 要提取特征的节点类型列表
+            relationship_types: 要提取特征的关系类型列表
         """
         self.graph_manager = graph_manager
         
-        # Default node and relationship types based on real data
+        # 真实的默认节点类型和关系
         self.node_types = node_types or [
             'DC', 'TENANT', 'NE', 'VM', 'HOST', 'HA', 'TRU'
         ]
@@ -48,87 +46,103 @@ class FeatureExtractor:
             'VM_TO_HOST', 'HOST_TO_HA', 'HA_TO_TRU'
         ]
         
-        # Node feature keys for each type
+        # 每个类型包括层信息的节点特征键
         self.node_feature_keys = {
-            'DC': ['id', 'name', 'type', 'business_type'],
-            'TENANT': ['id', 'name', 'type', 'business_type'],
-            'NE': ['id', 'name', 'type', 'business_type'],
-            'VM': ['id', 'name', 'type', 'metrics_data', 'log_data'],
-            'HOST': ['id', 'name', 'type', 'metrics_data', 'log_data'],
-            'HA': ['id', 'name', 'type'],
-            'TRU': ['id', 'name', 'type']
+            'DC': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type'],
+            'TENANT': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type'],
+            'NE': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type'],
+            'VM': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type', 'metrics_data', 'log_data'],
+            'HOST': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type', 'metrics_data', 'log_data'],
+            'HA': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type', 'metrics_data', 'log_data'],
+            'TRU': ['id', 'name', 'type', 'business_type', 'layer', 'layer_type', 'metrics_data', 'log_data']
         }
         
-        # Edge feature keys for each type
+        # 每个类型包括动态属性的边特征键
         self.edge_feature_keys = {
             'DC_TO_TENANT': ['source_type', 'target_type', 'weight'],
             'TENANT_TO_NE': ['source_type', 'target_type', 'weight'],
-            'NE_TO_VM': ['source_type', 'target_type', 'weight'],
-            'VM_TO_HOST': ['source_type', 'target_type', 'weight'],
-            'HOST_TO_HA': ['source_type', 'target_type', 'weight'],
-            'HA_TO_TRU': ['source_type', 'target_type', 'weight']
+            'NE_TO_VM': ['source_type', 'target_type', 'weight', 'dynamics_data'],
+            'VM_TO_HOST': ['source_type', 'target_type', 'weight', 'dynamics_data'],
+            'HOST_TO_HA': ['source_type', 'target_type', 'weight', 'dynamics_data'],
+            'HA_TO_TRU': ['source_type', 'target_type', 'weight', 'dynamics_data']
         }
         
-    def extract_node_features(self, node_id: str, node_type: str) -> Dict:
+        # 层配置
+        self.layer_config = {
+            'business': ['DC', 'TENANT', 'NE', 'VM'],
+            'resource': ['VM', 'HOST', 'HA', 'TRU']
+        }
+        
+    def extract_node_features(
+        self,
+        node_id: str,
+        node_type: str
+    ) -> Dict:
         """
-        Extract node features based on node type
+        根据节点类型提取节点特征
         
         Args:
-            node_id: Node ID
-            node_type: Type of the node
+            node_id: 节点ID
+            node_type: 节点类型
             
         Returns:
-            Dictionary of node features
+            节点特征字典
         """
         try:
-            # Get node properties
-            node = self.graph_manager.get_node_by_id(node_id)
+            # 获取节点属性
+            query = f"""
+            MATCH (n:{node_type})
+            WHERE id(n) = $node_id
+            RETURN n
+            """
             
-            if not node:
-                logger.warning(f"Node {node_id} not found")
-                return self._get_default_node_features(node_type)
+            with self.graph_manager._driver.session() as session:
+                result = session.run(query, {"node_id": node_id})
+                record = result.single()
                 
-            features = {}
-            
-            # Extract basic features
-            for key in ['id', 'name', 'type', 'business_type']:
-                if key in self.node_feature_keys[node_type]:
-                    features[key] = node.get(key, '')
+                if not record:
+                    logger.warning(f"Node {node_id} of type {node_type} not found")
+                    return self._get_default_node_features(node_type)
                     
-            # Extract metrics data if available
-            if 'metrics_data' in self.node_feature_keys[node_type]:
-                metrics = node.get('metrics_data', {})
-                if isinstance(metrics, str):
+                node = dict(record["n"].items())
+                features = {}
+                
+                # 提取所有可用的属性
+                for key in node:
+                    # 直接保留原始属性值
+                    features[key] = node[key]
+                
+                # 确保基本特征键存在
+                for key in self.node_feature_keys.get(node_type, []):
+                    if key not in features:
+                        features[key] = ""
+                
+                # 处理metrics_data以获取派生特征
+                if 'metrics_data' in features and isinstance(features['metrics_data'], str) and features['metrics_data']:
                     try:
-                        metrics = json.loads(metrics)
+                        metrics = json.loads(features['metrics_data'])
+                        if metrics:
+                            latest_metrics = self._get_latest_metrics(metrics)
+                            features.update(latest_metrics)
                     except json.JSONDecodeError:
-                        metrics = {}
-                        
-                # Process metrics data
-                if metrics:
-                    latest_metrics = self._get_latest_metrics(metrics)
-                    features.update(latest_metrics)
-                    
-            # Extract log data if available
-            if 'log_data' in self.node_feature_keys[node_type]:
-                log_data = node.get('log_data', {})
-                if isinstance(log_data, str):
+                        logger.warning(f"Failed to parse metrics_data for node {node_id}")
+                
+                # 处理log_data以获取派生特征
+                if 'log_data' in features and isinstance(features['log_data'], str) and features['log_data']:
                     try:
-                        log_data = json.loads(log_data)
+                        logs = json.loads(features['log_data'])
+                        if logs:
+                            latest_logs = self._get_latest_logs(logs)
+                            features.update(latest_logs)
                     except json.JSONDecodeError:
-                        log_data = {}
+                        logger.warning(f"Failed to parse log_data for node {node_id}")
                         
-                # Process log data
-                if log_data:
-                    latest_logs = self._get_latest_logs(log_data)
-                    features.update(latest_logs)
-                    
-            return features
-            
+                return features
+                
         except Exception as e:
             logger.error(f"Error extracting features for node {node_id}: {str(e)}")
             return self._get_default_node_features(node_type)
-            
+
     def extract_edge_features(
         self,
         source_id: str,
@@ -136,32 +150,99 @@ class FeatureExtractor:
         edge_type: str
     ) -> Dict:
         """
-        Extract edge features based on edge type
+        根据边类型提取边特征
         
         Args:
-            source_id: Source node ID
-            target_id: Target node ID
-            edge_type: Type of the edge
+            source_id: 源节点ID
+            target_id: 目标节点ID
+            edge_type: 边类型
             
         Returns:
-            Dictionary of edge features
+            边特征字典
         """
         try:
-            # Get edge properties
-            edge = self.graph_manager.get_edge(source_id, target_id, edge_type)
+            # 获取默认特征作为基础
+            features = self._get_default_edge_features(edge_type)
             
-            if not edge:
-                logger.warning(f"Edge {source_id}->{target_id} of type {edge_type} not found")
-                return self._get_default_edge_features(edge_type)
+            # 确保ID是整数类型
+            try:
+                source_id_int = int(source_id)
+                target_id_int = int(target_id)
+            except (ValueError, TypeError):
+                logger.warning(f"无法将ID转换为整数: source_id={source_id}, target_id={target_id}")
+                return features
+            
+            # 首先获取源节点和目标节点的类型
+            type_query = """
+            MATCH (source) WHERE id(source) = $source_id
+            MATCH (target) WHERE id(target) = $target_id
+            RETURN labels(source) as source_labels, labels(target) as target_labels
+            """
+            
+            with self.graph_manager._driver.session() as session:
+                type_result = session.run(type_query, {"source_id": source_id_int, "target_id": target_id_int})
+                type_record = type_result.single()
                 
-            features = {}
-            
-            # Extract basic features
-            for key in self.edge_feature_keys[edge_type]:
-                features[key] = edge.get(key, '')
+                if not type_record:
+                    logger.warning(f"无法获取节点类型: source_id={source_id_int}, target_id={target_id_int}")
+                    return features
                 
-            return features
+                source_labels = type_record['source_labels']
+                target_labels = type_record['target_labels']
+                
+                # 获取第一个标签作为节点类型
+                source_type = source_labels[0] if source_labels else ""
+                target_type = target_labels[0] if target_labels else ""
+                
+                # 设置源节点和目标节点类型
+                features["source_type"] = source_type
+                features["target_type"] = target_type
+        
             
+            # 获取边属性
+            edge_query = f"""
+            MATCH (source)-[r:{edge_type}]->(target)
+            WHERE id(source) = $source_id AND id(target) = $target_id
+            RETURN r
+            """
+            
+            with self.graph_manager._driver.session() as session:
+                edge_result = session.run(edge_query, {"source_id": source_id_int, "target_id": target_id_int})
+                edge_record = edge_result.single()
+                
+                if not edge_record:
+                    logger.warning(f"Edge {source_id}->{target_id} of type {edge_type} not found")
+                    return features
+                
+                # 提取边的所有属性
+                edge = dict(edge_record["r"].items())
+                
+                # 添加所有边属性到特征中
+                for key, value in edge.items():
+                    if key == 'weight':
+                        features[key] = float(value)
+                    else:
+                        features[key] = value
+                
+                # 处理dynamics_data以获取派生特征
+                if 'dynamics_data' in features and features['dynamics_data']:
+                    try:
+                        # 确保dynamics_data是字符串类型
+                        dynamics_data_str = features['dynamics_data']
+                        if not isinstance(dynamics_data_str, str):
+                            dynamics_data_str = str(dynamics_data_str)
+                            
+                        dynamics = json.loads(dynamics_data_str)
+                        if dynamics and 'propagation_data' in dynamics:
+                            latest_dynamics = self._get_latest_dynamics(dynamics['propagation_data'])
+                            features.update(latest_dynamics)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse dynamics_data for edge {source_id}->{target_id}: {str(e)}")
+                    except Exception as e:
+                        logger.warning(f"Error processing dynamics_data for edge {source_id}->{target_id}: {str(e)}")
+                
+                return features
+                
         except Exception as e:
             logger.error(f"Error extracting features for edge {source_id}->{target_id}: {str(e)}")
             return self._get_default_edge_features(edge_type)
@@ -172,14 +253,14 @@ class FeatureExtractor:
         chain_type: str = 'both'
     ) -> Dict[str, Any]:
         """
-        Extract features for complete chain starting from DC
+        提取从DC开始的完整链的特征
         
         Args:
-            dc_id: DC node ID
-            chain_type: Type of chain to extract ('business', 'resource', or 'both')
+            dc_id: DC节点ID
+            chain_type: 要提取的链类型 ('business', 'resource', or 'both')
             
         Returns:
-            Dictionary containing node and edge features for the complete chain
+            包含完整链的节点和边特征的字典
         """
         try:
             chains = {
@@ -200,7 +281,8 @@ class FeatureExtractor:
                 'edges': {},
                 'chain_info': {
                     'dc_id': dc_id,
-                    'chain_type': chain_type
+                    'chain_type': chain_type,
+                    'layer_info': self.layer_config
                 }
             }
             
@@ -210,12 +292,12 @@ class FeatureExtractor:
                 result['edges'].update(business_chain['edges'])
                 
             if chain_type in ['resource', 'both']:
-                # Get VM nodes from business chain
+                # 从业务链中获取VM节点
                 vm_ids = set()
                 if 'VM' in result['nodes']:
                     vm_ids = set(result['nodes']['VM'].keys())
                 
-                # Extract resource chain for each VM
+                # 提取每个VM的资源链
                 for vm_id in vm_ids:
                     resource_chain = self._extract_specific_chain(vm_id, chains['resource'])
                     for node_type, nodes in resource_chain['nodes'].items():
@@ -235,82 +317,156 @@ class FeatureExtractor:
             return {'nodes': {}, 'edges': {}, 'chain_info': {'dc_id': dc_id, 'chain_type': chain_type, 'error': str(e)}}
             
     def _extract_specific_chain(self, start_node_id: str, chain_config: Dict) -> Dict[str, Dict]:
-        """Extract features for a specific chain configuration"""
+        """提取特定链配置的特征"""
         result = {
             'nodes': {node_type: {} for node_type in chain_config['nodes']},
             'edges': {edge_type: {} for edge_type in chain_config['edges']}
         }
         
-        # Query to get the chain
+        # 修改查询，先匹配起始节点，然后再匹配路径
         query = f"""
+        MATCH (start)
+        WHERE id(start) = $start_node_id
         MATCH path = {chain_config['path']}
-        WHERE id(startNode(path)) = $start_node_id
+        WHERE start = nodes(path)[0]
         UNWIND nodes(path) as node
         WITH path, collect(node) as nodes
         UNWIND relationships(path) as rel
         RETURN nodes, collect(rel) as rels
         """
         
-        with self.graph_manager.driver.session() as session:
-            records = session.run(query, start_node_id=start_node_id)
-            
-            for record in records:
-                # Process nodes
-                for node in record['nodes']:
-                    node_type = list(node.labels)[0]  # Get the first label
-                    if node_type in result['nodes']:
-                        result['nodes'][node_type][node.id] = self.extract_node_features(node.id, node_type)
+        try:
+            with self.graph_manager._driver.session() as session:
+                records = session.run(query, start_node_id=start_node_id)
                 
-                # Process relationships
-                for rel in record['rels']:
-                    edge_type = rel.type
-                    if edge_type in result['edges']:
-                        edge_key = f"{rel.start_node.id}->{rel.end_node.id}"
-                        result['edges'][edge_type][edge_key] = self.extract_edge_features(
-                            rel.start_node.id,
-                            rel.end_node.id,
-                            edge_type
-                        )
+                for record in records:
+                    # 处理节点
+                    for node in record['nodes']:
+                        node_type = list(node.labels)[0]  # 获取第一个标签
+                        if node_type in result['nodes']:
+                            result['nodes'][node_type][node.id] = self.extract_node_features(node.id, node_type)
+                    
+                    # 处理关系
+                    for rel in record['rels']:
+                        edge_type = rel.type
+                        if edge_type in result['edges']:
+                            edge_key = f"{rel.start_node.id}->{rel.end_node.id}"
+                            result['edges'][edge_type][edge_key] = self.extract_edge_features(
+                                rel.start_node.id,
+                                rel.end_node.id,
+                                edge_type
+                            )
+        except Exception as e:
+            logger.error(f"Error in _extract_specific_chain: {str(e)}")
                         
         return result
             
     def _get_latest_metrics(self, metrics: Dict) -> Dict:
-        """Process metrics data to get latest values"""
+        """处理性能数据以获取最新值"""
         if not metrics or not isinstance(metrics, dict):
             return {}
             
         latest_metrics = {}
         for metric_name, values in metrics.items():
             if isinstance(values, list) and values:
-                # Assume the last value is the latest
+                # 假设最后一个值是最新的
                 latest_metrics[f"{metric_name}_latest"] = values[-1]
-                # Add some basic statistics
+                # 添加一些基本统计信息
                 latest_metrics[f"{metric_name}_mean"] = np.mean(values)
                 latest_metrics[f"{metric_name}_std"] = np.std(values)
                 
         return latest_metrics
         
+    def _get_latest_dynamics(self, dynamics_data: List[Dict]) -> Dict:
+        """
+        处理边的动态数据以获取最新值和统计信息
+        
+        Args:
+            dynamics_data: 包含timestamp和effects的列表
+            
+        Returns:
+            处理后的特征字典
+        """
+        if not dynamics_data or not isinstance(dynamics_data, list) or len(dynamics_data) == 0:
+            return {}
+            
+        # 按时间戳排序，确保最新的在最后
+        sorted_dynamics = sorted(dynamics_data, key=lambda x: x.get('timestamp', ''))
+        
+        # 获取最新的动态数据
+        latest_entry = sorted_dynamics[-1]
+        latest_dynamics = {}
+        
+        # 添加最新时间戳
+        latest_dynamics['latest_timestamp'] = latest_entry.get('timestamp', '')
+        
+        # 处理最新的effects数据
+        effects = latest_entry.get('effects', {})
+        for effect_name, effect_data in effects.items():
+            if isinstance(effect_data, dict):
+                for key, value in effect_data.items():
+                    latest_dynamics[f"{effect_name}_{key}"] = value
+        
+        # 计算各种状态的统计信息
+        status_counts = {}
+        for entry in sorted_dynamics:
+            effects = entry.get('effects', {})
+            for effect_name, effect_data in effects.items():
+                if isinstance(effect_data, dict) and 'source_status' in effect_data:
+                    status = effect_data['source_status']
+                    if effect_name not in status_counts:
+                        status_counts[effect_name] = {}
+                    if status not in status_counts[effect_name]:
+                        status_counts[effect_name][status] = 0
+                    status_counts[effect_name][status] += 1
+        
+        # 添加状态统计信息到特征中
+        for effect_name, counts in status_counts.items():
+            for status, count in counts.items():
+                latest_dynamics[f"{effect_name}_status_{status}_count"] = count
+            total = sum(counts.values())
+            for status, count in counts.items():
+                latest_dynamics[f"{effect_name}_status_{status}_ratio"] = count / total if total > 0 else 0
+                
+        return latest_dynamics
+        
     def _get_latest_logs(self, logs: Dict) -> Dict:
-        """Process log data to get latest entries"""
+        """处理日志数据以获取最新条目"""
         if not logs or not isinstance(logs, dict):
             return {}
             
         latest_logs = {}
         for log_type, entries in logs.items():
             if isinstance(entries, list) and entries:
-                # Get the latest log entry
+                # 获取最新的日志条目
                 latest_logs[f"{log_type}_latest"] = entries[-1]
-                # Count log entries
+                # 统计日志条目
                 latest_logs[f"{log_type}_count"] = len(entries)
                 
         return latest_logs
         
     def _get_default_node_features(self, node_type: str) -> Dict:
-        """Get default features for a node type"""
-        features = {key: '' for key in self.node_feature_keys[node_type]}
-        return features
-        
+        """获取默认节点特征"""
+        default_features = {}
+        for key in self.node_feature_keys.get(node_type, []):
+            if key in ['metrics_data', 'log_data']:
+                default_features[key] = ""
+            else:
+                default_features[key] = ""
+        return default_features
+       
     def _get_default_edge_features(self, edge_type: str) -> Dict:
-        """Get default features for an edge type"""
-        features = {key: '' for key in self.edge_feature_keys[edge_type]}
-        return features 
+        """获取默认边特征"""
+        default_features = {
+            "source_type": "",
+            "target_type": "",
+            "weight": 1.0,
+            "dynamics_data": ""
+        }
+        
+        # 添加边类型特定的默认特征
+        for key in self.edge_feature_keys.get(edge_type, []):
+            if key not in default_features:
+                default_features[key] = ""
+                
+        return default_features

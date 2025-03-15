@@ -13,25 +13,25 @@
 
 ### 核心组件
 
-1. **特征提取器** (FeatureExtractor)
+1. **特征提取器** (FeatureExtractor) ✅
    - 从Neo4j提取节点和关系特征
    - 支持静态和动态特征
    - 批量处理优化
-   - 文本描述生成
+   - 链路特征提取
 
-2. **双通道编码器** (DualEncoder)
+2. **双通道编码器** (DualEncoder) 🔄
    - BERT文本编码器
    - GAT图结构编码器
    - 对比学习训练
    - 相似度计算
 
-3. **混合索引** (HybridIndex)
+3. **混合索引** (HybridIndex) 🔄
    - FAISS向量索引
    - 结构化过滤索引
    - 多条件组合查询
    - 批量构建支持
 
-4. **查询处理器** (QueryProcessor)
+4. **查询处理器** (QueryProcessor) 🔄
    - 意图识别
    - 实体提取
    - 查询路由
@@ -75,12 +75,29 @@ MODEL_CONFIG = {
 1. 特征提取
 ```python
 from rag.feature_extractor import FeatureExtractor
+from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
 
-extractor = FeatureExtractor(uri, user, password)
-features = extractor.extract_node_static_features()
+# 初始化Neo4j连接
+graph_manager = Neo4jGraphManager(
+    uri="bolt://localhost:7687",
+    user="neo4j",
+    password="your_password"
+)
+
+# 初始化特征提取器
+extractor = FeatureExtractor(graph_manager)
+
+# 提取节点特征
+node_features = extractor.extract_node_features(node_id, node_type)
+
+# 提取边特征
+edge_features = extractor.extract_edge_features(source_id, target_id, edge_type)
+
+# 提取链路特征
+chain_features = extractor.extract_chain_features(dc_id, chain_type='both')
 ```
 
-2. 模型训练
+2. 模型训练 (即将实现)
 ```python
 from rag.trainer import Trainer
 
@@ -88,7 +105,7 @@ trainer = Trainer(model, train_loader, val_loader)
 trainer.train(num_epochs=10)
 ```
 
-3. 查询处理
+3. 查询处理 (即将实现)
 ```python
 from rag.query_processor import QueryProcessor
 
@@ -100,18 +117,47 @@ result = processor.process_query("查找与VM-001相关的所有主机")
 
 ```
 .
-├── docs/                    # 文档
+├── docs/                   # 文档
+│   ├── rag_design_v2.md    # RAG设计文档V2
+│   ├── llm_enhanced_design.md # LLM增强设计
+│   └── progress_report.md  # 进度报告
 ├── rag/                    # 主要代码
-│   ├── feature_extractor.py
-│   ├── encoder.py
-│   ├── indexer.py
-│   ├── query_processor.py
-│   └── trainer.py
-├── tests/                  # 测试代码
+│   ├── feature_extractor.py # 特征提取器
+│   ├── encoder.py          # 编码器(即将实现)
+│   ├── indexer.py          # 索引器(即将实现)
+│   ├── query_processor.py  # 查询处理器(即将实现)
+│   └── trainer.py          # 训练器(即将实现)
+├── preprocess/             # 预处理代码
+│   └── utils/              # 工具函数
+│       └── neo4j_graph_manager.py # Neo4j图管理器
 ├── scripts/                # 工具脚本
+│   └── test_feature_extraction.py # 特征提取测试脚本
+├── test_results/           # 测试结果
 ├── requirements.txt        # 依赖
-└── README.md              # 说明文档
+└── README.md               # 说明文档
 ```
+
+## 当前进度
+
+- ✅ 特征提取模块完成 (2025-03-15)
+  - 节点特征提取
+  - 边特征提取
+  - 链路特征提取
+  - 测试脚本
+
+- ✅ 图文对生成完成 (2025-03-20)
+  - GraphTextDataset类实现
+  - 中文文本描述生成
+  - 图文对创建与测试
+  - 复杂查询样本生成
+  - 统计信息查询样本生成
+
+- 🔄 双通道编码器 (计划开始: 2025-03-22)
+  - 文本编码器
+  - 图编码器
+  - 特征对齐
+
+详细进度请查看 [进度报告](./docs/progress_report.md) 和 [工作日志](./docs/work_log.md)
 
 ## 注意事项
 

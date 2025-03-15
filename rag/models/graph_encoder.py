@@ -5,7 +5,7 @@
 # @Author : ${1:kkutysllb
 # @E-mail : libing1@sn.chinamobile.com, 31468130@qq.com
 # @Date   : 2025-03-15 09:40
-# @Desc   : Graph encoder module based on Graph Attention Networks.
+# @Desc   : 基于GAT的图编码器
 # --------------------------------------------------------
 """
 
@@ -16,7 +16,7 @@ from torch_geometric.nn import GATConv, global_mean_pool
 from typing import Dict, List, Optional
 
 class GraphEncoder(nn.Module):
-    """Graph encoder based on Graph Attention Networks"""
+    """基于GAT的图编码器"""
     
     def __init__(
         self,
@@ -30,17 +30,17 @@ class GraphEncoder(nn.Module):
         residual: bool = True
     ):
         """
-        Initialize graph encoder
+        初始化图编码器
         
         Args:
-            node_dim: Input node feature dimension
-            edge_dim: Input edge feature dimension
-            hidden_dim: Hidden dimension
-            output_dim: Output dimension
-            num_layers: Number of GAT layers
-            num_heads: Number of attention heads
-            dropout: Dropout rate
-            residual: Whether to use residual connections
+            node_dim: 输入节点特征维度
+            edge_dim: 输入边特征维度
+            hidden_dim: 隐藏维度
+            output_dim: 输出维度
+            num_layers: GAT层数
+            num_heads: 注意力头数
+            dropout: 丢弃率
+            residual: 是否使用残差连接
         """
         super().__init__()
         
@@ -53,7 +53,7 @@ class GraphEncoder(nn.Module):
         self.dropout = dropout
         self.residual = residual
         
-        # Node feature projection
+        # 节点特征投影
         self.node_projection = nn.Sequential(
             nn.Linear(node_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -61,7 +61,7 @@ class GraphEncoder(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Edge feature projection
+        # 边特征投影
         self.edge_projection = nn.Sequential(
             nn.Linear(edge_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -69,10 +69,10 @@ class GraphEncoder(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # GAT layers
+        # GAT层
         self.gat_layers = nn.ModuleList()
         
-        # First layer
+        # 第一层
         self.gat_layers.append(
             GATConv(
                 in_channels=hidden_dim,
@@ -84,7 +84,7 @@ class GraphEncoder(nn.Module):
             )
         )
         
-        # Hidden layers
+        # 隐藏层
         for _ in range(num_layers - 2):
             self.gat_layers.append(
                 GATConv(
@@ -97,7 +97,7 @@ class GraphEncoder(nn.Module):
                 )
             )
             
-        # Output layer
+        # 输出层
         self.gat_layers.append(
             GATConv(
                 in_channels=hidden_dim,
@@ -109,7 +109,7 @@ class GraphEncoder(nn.Module):
             )
         )
         
-        # Layer normalization
+        # 层归一化
         self.layer_norms = nn.ModuleList([
             nn.LayerNorm(hidden_dim) for _ in range(num_layers - 1)
         ])
@@ -145,14 +145,14 @@ class GraphEncoder(nn.Module):
         
         # Apply GAT layers
         for i, gat_layer in enumerate(self.gat_layers):
-            # Residual connection
+            # 残差连接
             if self.residual and i > 0:
                 x = x + node_embeddings[-1]
                 
-            # Apply GAT
+            # 应用GAT
             x = gat_layer(x, edge_index, edge_attr=edge_attr)
             
-            # Apply normalization and activation
+            # 应用归一化和激活
             x = self.layer_norms[i](x)
             if i < self.num_layers - 1:
                 x = F.relu(x)
@@ -160,7 +160,7 @@ class GraphEncoder(nn.Module):
                 
             node_embeddings.append(x)
             
-        # Pool graph embedding
+        # 池化图嵌入
         if batch is not None:
             graph_embedding = global_mean_pool(x, batch)
         else:

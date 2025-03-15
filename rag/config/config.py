@@ -2,15 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 # --------------------------------------------------------
-# @Author : ${1:kkutysllb
+# @Author : kkutysllb
 # @E-mail : libing1@sn.chinamobile.com, 31468130@qq.com
 # @Date   : 2025-03-15 09:35
-# @Desc   : Configuration management module.  
+# @Desc   : 配置管理模块
 # --------------------------------------------------------
-"""
-
-"""
-Configuration management module.
 """
 
 import yaml
@@ -24,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelConfig:
     """Model configuration"""
-    text_model_name: str = "bert-base-uncased"
+    text_model_name: str = "bert-base-chinese"  # 更改为中文预训练模型
     node_dim: int = 256
     edge_dim: int = 64
     hidden_dim: int = 256
@@ -60,7 +56,7 @@ class Neo4jConfig:
     """Neo4j database configuration"""
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
-    password: str = "password"
+    password: str = "Oms_2600a"
     database: str = "neo4j"
     
 @dataclass
@@ -143,4 +139,32 @@ class Config:
                 
 def load_config(config_path: str) -> Config:
     """Helper function to load configuration"""
-    return Config.from_yaml(config_path) 
+    return Config.from_yaml(config_path)
+
+def get_config(config_path: str = None) -> Dict[str, Any]:
+    """
+    获取配置，如果提供了配置文件路径则从文件加载，否则返回默认配置
+    
+    Args:
+        config_path: 配置文件路径（可选）
+        
+    Returns:
+        配置字典
+    """
+    if config_path and os.path.exists(config_path):
+        try:
+            config = load_config(config_path)
+            return config.to_dict()
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {e}")
+            logger.info("使用默认配置")
+    
+    # 创建默认配置
+    config = Config(
+        model=ModelConfig(),
+        training=TrainingConfig(),
+        data=DataConfig(),
+        neo4j=Neo4jConfig()
+    )
+    
+    return config.to_dict() 
