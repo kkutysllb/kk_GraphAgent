@@ -22,6 +22,7 @@ from pathlib import Path
 import concurrent.futures
 import threading
 from tqdm import tqdm
+from datetime import datetime
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -206,52 +207,62 @@ def generate_dataset(
             # 保存数据集
             logger.info("保存数据集...")
             
+            # 创建保存数据的目录
+            output_path.mkdir(parents=True, exist_ok=True)
+            
+            # 定义保存数据集的函数
+            def save_dataset_to_json(dataset, file_path):
+                # 提取需要保存的数据
+                data_to_save = []
+                for i in range(len(dataset)):
+                    item = dataset[i]
+                    data_to_save.append({
+                        'node_id': item['node_id'],
+                        'text': item['text'],
+                        'subgraph': item['subgraph'],
+                        'node_type': item['node_type']
+                    })
+                
+                # 保存为JSON文件
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+            
             # 保存训练集
-            train_file = output_path / "train_dataset.pt"
-            torch.save(train_dataset, train_file)
+            train_file = output_path / "train_dataset.json"
+            save_dataset_to_json(train_dataset, train_file)
             logger.info(f"训练集已保存到 {train_file}")
             
             # 保存验证集
-            val_file = output_path / "val_dataset.pt"
-            torch.save(val_dataset, val_file)
+            val_file = output_path / "val_dataset.json"
+            save_dataset_to_json(val_dataset, val_file)
             logger.info(f"验证集已保存到 {val_file}")
             
             # 保存测试集
-            test_file = output_path / "test_dataset.pt"
-            torch.save(test_dataset, test_file)
+            test_file = output_path / "test_dataset.json"
+            save_dataset_to_json(test_dataset, test_file)
             logger.info(f"测试集已保存到 {test_file}")
             
-            # 保存数据集信息
-            dataset_info = {
-                "creation_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "parameters": {
-                    "balance_node_types": balance_node_types,
-                    "adaptive_subgraph_size": adaptive_subgraph_size,
-                    "negative_sample_ratio": negative_sample_ratio,
-                    "data_augmentation": data_augmentation,
-                    "train_ratio": train_ratio,
-                    "val_ratio": val_ratio,
-                    "test_ratio": test_ratio,
-                    "seed": seed
-                },
-                "statistics": {
-                    "total_nodes": sum(node_type_counts.values()),
-                    "node_types": node_type_counts,
-                    "train_samples": len(train_dataset.pairs),
-                    "val_samples": len(val_dataset.pairs),
-                    "test_samples": len(test_dataset.pairs)
-                },
-                "config": {
-                    "max_node_size": dataset_config.get('max_node_size', 50),
-                    "max_edge_size": dataset_config.get('max_edge_size', 100),
-                    "include_dynamic": dataset_config.get('include_dynamic', True)
-                }
+            # 保存数据集配置信息
+            config_file = output_path / "dataset_config.json"
+            node_types = graph_config.get('node_types')
+            edge_types = graph_config.get('edge_types')
+            config_info = {
+                "train_size": len(train_dataset),
+                "val_size": len(val_dataset),
+                "test_size": len(test_dataset),
+                "node_types": node_types,
+                "edge_types": edge_types,
+                "balance_node_types": balance_node_types,
+                "adaptive_subgraph_size": adaptive_subgraph_size,
+                "negative_sample_ratio": negative_sample_ratio,
+                "data_augmentation": data_augmentation,
+                "split_ratio": split_ratio,
+                "seed": seed,
+                "creation_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            
-            info_file = output_path / "dataset_info.json"
-            with open(info_file, "w", encoding="utf-8") as f:
-                json.dump(dataset_info, f, ensure_ascii=False, indent=2)
-            logger.info(f"数据集信息已保存到 {info_file}")
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_info, f, ensure_ascii=False, indent=2)
+            logger.info(f"数据集配置信息已保存到 {config_file}")
             
             # 保存样本示例
             logger.info("保存样本示例...")

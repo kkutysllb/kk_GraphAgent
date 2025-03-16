@@ -94,9 +94,10 @@ MODEL_CONFIG = {
 }
 ```
 
-### 使用示例
+## 使用示例
 
 1. 特征提取
+
 ```python
 from rag.feature_extractor import FeatureExtractor
 from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
@@ -121,15 +122,112 @@ edge_features = extractor.extract_edge_features(source_id, target_id, edge_type)
 chain_features = extractor.extract_chain_features(dc_id, chain_type='both')
 ```
 
-2. 模型训练 (即将实现)
-```python
-from rag.trainer import Trainer
+2. 数据集生成
 
-trainer = Trainer(model, train_loader, val_loader)
-trainer.train(num_epochs=10)
+```python
+from rag.data.dataset import GraphTextDataset
+from rag.feature_extractor import FeatureExtractor
+from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
+from rag.utils.config import load_config
+
+# 加载配置
+db_config = load_config("configs/database_config.yaml")
+
+# 初始化Neo4j连接
+graph_manager = Neo4jGraphManager(
+    uri=db_config["neo4j"]["uri"],
+    user=db_config["neo4j"]["user"],
+    password=db_config["neo4j"]["password"]
+)
+
+# 初始化特征提取器
+extractor = FeatureExtractor(graph_manager)
+
+# 创建图文数据集
+dataset = GraphTextDataset(
+    graph_manager=graph_manager,
+    feature_extractor=extractor,
+    node_types=db_config["dataset"]["node_types"],
+    edge_types=db_config["dataset"]["edge_types"],
+    balance_node_types=True,
+    adaptive_subgraph_size=True,
+    data_augmentation=True,
+    negative_sample_ratio=0.3
+)
+
+# 获取数据样本
+sample = dataset[0]
+print(f"节点ID: {sample['node_id']}")
+print(f"文本描述: {sample['text']}")
+print(f"子图节点数: {len(sample['subgraph']['nodes'])}")
 ```
 
-3. 查询处理 (即将实现)
+3. 双通道编码器
+
+```python
+from rag.models.dual_encoder import DualEncoder
+import torch
+
+# 初始化双通道编码器
+encoder = DualEncoder(
+    text_embedding_dim=768,
+    graph_embedding_dim=256,
+    projection_dim=512
+)
+
+# 编码文本
+text = "这是一个虚拟机节点，连接到多个网络设备"
+text_embedding = encoder.encode_text(text)
+
+# 编码图结构
+# 假设graph_data是一个包含节点和边信息的字典
+graph_embedding = encoder.encode_graph(graph_data)
+
+# 计算相似度
+similarity = encoder.compute_similarity(text_embedding, graph_embedding)
+print(f"文本和图的相似度: {similarity.item()}")
+```
+
+4. 模型训练 (部分实现)
+
+```python
+from rag.models.dual_encoder import DualEncoder
+from rag.models.loss import ContrastiveLoss
+from torch.utils.data import DataLoader
+import torch.optim as optim
+
+# 初始化模型和损失函数
+model = DualEncoder(text_embedding_dim=768, graph_embedding_dim=256, projection_dim=512)
+criterion = ContrastiveLoss(margin=0.5)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+# 假设train_dataset是已经创建好的GraphTextDataset实例
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+# 训练循环
+for epoch in range(10):
+    for batch in train_loader:
+        # 获取文本和图数据
+        texts = batch['text']
+        graphs = batch['subgraph']
+        
+        # 前向传播
+        text_embeddings = model.encode_text(texts)
+        graph_embeddings = model.encode_graph(graphs)
+        
+        # 计算损失
+        loss = criterion(text_embeddings, graph_embeddings)
+        
+        # 反向传播和优化
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+    print(f"Epoch {epoch+1}, Loss: {loss.item()}")
+```
+
+5. 查询处理 (即将实现)
+
 ```python
 from rag.query_processor import QueryProcessor
 
@@ -141,24 +239,44 @@ result = processor.process_query("查找与VM-001相关的所有主机")
 
 ```
 .
-├── docs/                   # 文档
-│   ├── rag_design_v2.md    # RAG设计文档V2
-│   ├── llm_enhanced_design.md # LLM增强设计
-│   └── progress_report.md  # 进度报告
-├── rag/                    # 主要代码
-│   ├── feature_extractor.py # 特征提取器
-│   ├── encoder.py          # 编码器(即将实现)
-│   ├── indexer.py          # 索引器(即将实现)
-│   ├── query_processor.py  # 查询处理器(即将实现)
-│   └── trainer.py          # 训练器(即将实现)
-├── preprocess/             # 预处理代码
-│   └── utils/              # 工具函数
-│       └── neo4j_graph_manager.py # Neo4j图管理器
-├── scripts/                # 工具脚本
-│   └── test_feature_extraction.py # 特征提取测试脚本
-├── test_results/           # 测试结果
-├── requirements.txt        # 依赖
-└── README.md               # 说明文档
+├── configs/ # 配置文件
+│ ├── database_config.yaml # 数据库配置
+│ └── train_config.yaml # 训练配置
+├── docs/ # 文档
+│ ├── graph_encoder_design.md # 图编码器设计文档
+│ ├── progress.md # 进度文档
+│ ├── rag_design.md # RAG设计文档
+│ ├── text_encoder_design.md # 文本编码器设计文档
+│ └── work_log.md # 工作日志
+├── preprocess/ # 预处理代码
+│ └── utils/ # 工具函数
+│ └── neo4j_graph_manager.py # Neo4j图管理器
+├── rag/ # 主要代码
+│ ├── data/ # 数据处理
+│ │ └── dataset.py # 图文数据集
+│ ├── models/ # 模型
+│ │ ├── dual_encoder.py # 双通道编码器
+│ │ └── loss.py # 损失函数
+│ ├── utils/ # 工具函数
+│ │ ├── config.py # 配置加载
+│ │ └── logging.py # 日志工具
+│ ├── feature_extractor.py # 特征提取器
+│ └── test_dynamic_heterogeneous_graph_encoder.py # 图编码器测试
+├── scripts/ # 工具脚本
+│ ├── extract_sample_data.py # 样本数据提取
+│ ├── generate_dataset.py # 数据集生成
+│ ├── test_dataset.py # 数据集测试
+│ ├── test_feature_extraction.py # 特征提取测试
+│ ├── test_text_encoder.py # 文本编码器测试
+│ └── visualize_results.py # 结果可视化
+├── datasets/ # 数据集
+│ ├── full_dataset/ # 完整数据集
+│ └── samples/ # 样本数据
+├── test_results/ # 测试结果
+├── .gitignore # Git忽略文件
+├── .gitattributes # Git属性文件
+├── requirements.txt # 依赖
+└── README.md # 说明文档
 ```
 
 ## 当前进度

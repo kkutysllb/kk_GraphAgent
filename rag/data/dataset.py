@@ -1429,3 +1429,21 @@ class GraphTextDataset(Dataset, LoggerMixin):
             'subgraph': pair['subgraph'],
             'node_type': pair['node_type']
         } 
+        
+    def __getstate__(self):
+        """自定义序列化方法，排除无法序列化的Neo4j连接对象"""
+        state = self.__dict__.copy()
+        # 移除无法序列化的对象
+        if 'graph_manager' in state:
+            del state['graph_manager']
+        if 'feature_extractor' in state:
+            del state['feature_extractor']
+        return state
+    
+    def __setstate__(self, state):
+        """自定义反序列化方法"""
+        self.__dict__.update(state)
+        # 注意：反序列化后，graph_manager和feature_extractor将为None
+        # 如果需要使用这些对象，需要在加载后重新初始化它们
+        self.graph_manager = None
+        self.feature_extractor = None 
