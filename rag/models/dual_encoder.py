@@ -11,10 +11,10 @@
 
 import torch
 import torch.nn as nn
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from .text_encoder import TextEncoder
-from .graph_encoder import GraphEncoder
+from .dynamic_heterogeneous_graph_encoder import DynamicHeterogeneousGraphEncoder
 
 class DualEncoder(nn.Module):
     """Dual encoder combining text and graph encoders"""
@@ -24,12 +24,17 @@ class DualEncoder(nn.Module):
         text_model_name: str = "bert-base-uncased",
         node_dim: int = 256,
         edge_dim: int = 64,
+        time_series_dim: int = 32,
         hidden_dim: int = 256,
         output_dim: int = 768,
         num_layers: int = 2,
         num_heads: int = 8,
         dropout: float = 0.1,
-        freeze_text: bool = False
+        freeze_text: bool = False,
+        node_types: List[str] = ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"],
+        edge_types: List[str] = ["DC_TO_TENANT", "TENANT_TO_NE", "NE_TO_VM", "VM_TO_HOST", "HOST_TO_HA", "HA_TO_TRU"],
+        seq_len: int = 24,
+        num_hierarchies: int = 7
     ):
         """
         Initialize dual encoder
@@ -38,12 +43,17 @@ class DualEncoder(nn.Module):
             text_model_name: Name of pre-trained text model
             node_dim: Input node feature dimension
             edge_dim: Input edge feature dimension
+            time_series_dim: Input time series feature dimension
             hidden_dim: Hidden dimension
             output_dim: Output dimension
             num_layers: Number of graph layers
             num_heads: Number of attention heads
             dropout: Dropout rate
             freeze_text: Whether to freeze text encoder
+            node_types: List of node types
+            edge_types: List of edge types
+            seq_len: Length of time series sequence
+            num_hierarchies: Number of hierarchy levels
         """
         super().__init__()
         
@@ -56,14 +66,19 @@ class DualEncoder(nn.Module):
         )
         
         # Graph encoder
-        self.graph_encoder = GraphEncoder(
+        self.graph_encoder = DynamicHeterogeneousGraphEncoder(
+            node_types=node_types,
+            edge_types=edge_types,
             node_dim=node_dim,
             edge_dim=edge_dim,
+            time_series_dim=time_series_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,
+            seq_len=seq_len,
             num_layers=num_layers,
             num_heads=num_heads,
-            dropout=dropout
+            dropout=dropout,
+            num_hierarchies=num_hierarchies
         )
         
         # Alignment projection
@@ -114,8 +129,10 @@ class DualEncoder(nn.Module):
     def encode_graph(
         self,
         node_features: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_features: torch.Tensor,
+        edge_indices_dict: Dict[str, torch.Tensor],
+        edge_features_dict: Dict[str, torch.Tensor],
+        time_series_features: Optional[torch.Tensor] = None,
+        node_hierarchies: Optional[torch.Tensor] = None,
         batch: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
@@ -123,8 +140,10 @@ class DualEncoder(nn.Module):
         
         Args:
             node_features: Node feature matrix
-            edge_index: Edge index matrix
-            edge_features: Edge feature matrix
+            edge_indices_dict: Dictionary of edge indices by edge type
+            edge_features_dict: Dictionary of edge features by edge type
+            time_series_features: Time series features
+            node_hierarchies: Node hierarchy information
             batch: Batch assignment matrix
             
         Returns:
@@ -133,8 +152,10 @@ class DualEncoder(nn.Module):
         # Get graph embeddings
         graph_outputs = self.graph_encoder(
             node_features=node_features,
-            edge_index=edge_index,
-            edge_features=edge_features,
+            edge_indices_dict=edge_indices_dict,
+            edge_features_dict=edge_features_dict,
+            time_series_features=time_series_features,
+            node_hierarchies=node_hierarchies,
             batch=batch
         )
         
@@ -151,8 +172,10 @@ class DualEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         node_features: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_features: torch.Tensor,
+        edge_indices_dict: Dict[str, torch.Tensor],
+        edge_features_dict: Dict[str, torch.Tensor],
+        time_series_features: Optional[torch.Tensor] = None,
+        node_hierarchies: Optional[torch.Tensor] = None,
         batch: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
@@ -163,8 +186,10 @@ class DualEncoder(nn.Module):
             input_ids: Input token IDs
             attention_mask: Attention mask
             node_features: Node feature matrix
-            edge_index: Edge index matrix
-            edge_features: Edge feature matrix
+            edge_indices_dict: Dictionary of edge indices by edge type
+            edge_features_dict: Dictionary of edge features by edge type
+            time_series_features: Time series features
+            node_hierarchies: Node hierarchy information
             batch: Batch assignment matrix
             token_type_ids: Token type IDs
             
@@ -183,8 +208,10 @@ class DualEncoder(nn.Module):
         
         graph_outputs = self.encode_graph(
             node_features=node_features,
-            edge_index=edge_index,
-            edge_features=edge_features,
+            edge_indices_dict=edge_indices_dict,
+            edge_features_dict=edge_features_dict,
+            time_series_features=time_series_features,
+            node_hierarchies=node_hierarchies,
             batch=batch
         )
         
