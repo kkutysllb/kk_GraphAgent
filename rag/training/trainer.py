@@ -21,7 +21,15 @@ import os
 from tqdm import tqdm
 
 from ..models.dual_encoder import DualEncoder
-from ..models.loss import ContrastiveLoss, InfoNCELoss, TripletLoss
+from ..models.loss import (
+    ContrastiveLoss, 
+    InfoNCELoss, 
+    TripletLoss,
+    BatchContrastiveLoss,
+    MultiPositiveLoss,
+    CombinedLoss,
+    HardNegativeMiningLoss
+)
 from ..utils.logging import LoggerMixin
 from ..utils.tools import save_checkpoint, load_checkpoint, get_lr
 
@@ -52,7 +60,7 @@ class Trainer(LoggerMixin):
             model: DualEncoder model
             train_loader: Training data loader
             val_loader: Validation data loader
-            loss_type: Type of loss function (contrastive, infonce, or triplet)
+            loss_type: Type of loss function (contrastive, infonce, triplet, batch_contrastive, multi_positive, hard_negative_mining, combined)
             learning_rate: Learning rate
             weight_decay: Weight decay
             warmup_steps: Number of warmup steps
@@ -77,8 +85,19 @@ class Trainer(LoggerMixin):
             self.loss_fn = InfoNCELoss()
         elif loss_type == "triplet":
             self.loss_fn = TripletLoss()
+        elif loss_type == "batch_contrastive":
+            self.loss_fn = BatchContrastiveLoss()
+        elif loss_type == "multi_positive":
+            self.loss_fn = MultiPositiveLoss()
+        elif loss_type == "hard_negative_mining":
+            self.loss_fn = HardNegativeMiningLoss()
+        elif loss_type == "combined":
+            self.loss_fn = CombinedLoss()
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
+        
+        # Move loss function to device
+        self.loss_fn = self.loss_fn.to(device)
             
         # Create optimizer
         self.optimizer = optim.AdamW(
@@ -107,6 +126,14 @@ class Trainer(LoggerMixin):
         self.best_val_loss = float('inf')
         self.best_val_accuracy = 0.0
         self.patience_counter = 0
+        
+        # Initialize training history
+        self.history = {
+            'train_loss': [],
+            'val_loss': [],
+            'train_accuracy': [],
+            'val_accuracy': []
+        }
         
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch"""
@@ -255,26 +282,18 @@ class Trainer(LoggerMixin):
         """Train the model"""
         self.log_info("Starting training...")
         
-        # Initialize metrics history
-        history = {
-            'train_loss': [],
-            'train_accuracy': [],
-            'val_loss': [],
-            'val_accuracy': []
-        }
-        
         for epoch in range(self.num_epochs):
             self.log_info(f"Epoch {epoch + 1}/{self.num_epochs}")
             
             # Train
             train_metrics = self.train_epoch()
-            history['train_loss'].append(train_metrics['loss'])
-            history['train_accuracy'].append(train_metrics['accuracy'])
+            self.history['train_loss'].append(train_metrics['loss'])
+            self.history['train_accuracy'].append(train_metrics['accuracy'])
             
             # Validate
             val_metrics = self.validate()
-            history['val_loss'].append(val_metrics['loss'])
-            history['val_accuracy'].append(val_metrics['accuracy'])
+            self.history['val_loss'].append(val_metrics['loss'])
+            self.history['val_accuracy'].append(val_metrics['accuracy'])
             
             # Log metrics
             self.log_info(
@@ -312,7 +331,7 @@ class Trainer(LoggerMixin):
                 )
                 break
                 
-        return history
+        return self.history
         
     def load_best_model(self) -> Tuple[nn.Module, Dict[str, float]]:
         """Load the best model from checkpoint"""

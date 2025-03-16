@@ -1,0 +1,75 @@
+# 双通道编码器训练配置
+
+# 实验名称
+experiment_name: "dual_encoder_base"
+
+# 随机种子
+seed: 42
+
+# 数据配置
+data:
+  # Neo4j数据库配置
+  neo4j_uri: "bolt://localhost:7687"
+  neo4j_user: "neo4j"
+  neo4j_password: "password"
+  
+  # 数据处理配置
+  max_graph_size: 100  # 最大图节点数
+  max_text_length: 128  # 最大文本长度
+  batch_size: 32  # 批量大小
+  num_workers: 4  # 数据加载线程数
+  
+  # 数据增强配置
+  augmentation: true  # 是否使用数据增强
+  negative_sampling: "hard"  # 负样本采样策略 (random, hard, semi-hard)
+
+# 模型配置
+model:
+  # 文本编码器配置
+  text_encoder_name: "bert-base-chinese"  # 预训练模型名称
+  text_pooling_strategy: "cls"  # 文本池化策略 (cls, mean, max, attention)
+  
+  # 图编码器配置
+  graph_hidden_dim: 256  # 图隐藏层维度
+  graph_num_layers: 3  # 图卷积层数
+  
+  # 投影层配置
+  projection_dim: 768  # 投影维度
+  dropout: 0.1  # Dropout比率
+
+# 损失函数配置
+loss:
+  type: "combined"  # 损失函数类型 (contrastive, infonce, triplet, batch_contrastive, multi_positive, hard_negative_mining, combined)
+  temperature: 0.07  # 温度参数
+  margin: 0.3  # 边界参数
+  contrastive_weight: 1.0  # 对比损失权重
+  triplet_weight: 0.5  # 三元组损失权重
+  use_hard_negatives: true  # 是否使用硬负样本
+  mining_strategy: "semi-hard"  # 挖掘策略 (hard, semi-hard, distance)
+
+# 优化器配置
+optimizer:
+  lr: 2.0e-5  # 学习率
+  weight_decay: 0.01  # 权重衰减
+  min_lr: 1.0e-6  # 最小学习率
+
+# 训练配置
+training:
+  num_epochs: 20  # 训练周期数
+  gradient_accumulation_steps: 1  # 梯度累积步数
+  max_grad_norm: 1.0  # 梯度裁剪阈值
+  warmup_ratio: 0.1  # 预热比例
+  
+  # 评估配置
+  eval_steps: 100  # 评估步数
+  save_steps: 500  # 保存步数
+  
+  # 早停配置
+  early_stopping:
+    patience: 3  # 早停耐心值
+    min_delta: 0.001  # 最小改进阈值
+
+# 日志配置
+logging:
+  log_steps: 10  # 日志记录步数
+  tensorboard: true  # 是否使用TensorBoard 
