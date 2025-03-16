@@ -1,0 +1,30 @@
+# Neo4j数据库配置
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  password: "Oms_2600a"  # 请替换为实际密码
+
+# 数据集配置
+dataset:
+  max_node_size: 50
+  max_edge_size: 100
+  include_dynamic: true
+  data_augmentation: false
+  
+# 节点和边类型配置
+graph:
+  node_types:
+    - "DC"
+    - "TENANT"
+    - "NE"
+    - "VM"
+    - "HOST"
+    - "HA"
+    - "TRU"
+  edge_types:
+    - "DC_TO_TENANT"
+    - "TENANT_TO_NE"
+    - "NE_TO_VM"
+    - "VM_TO_HOST"
+    - "HOST_TO_HA"
+    - "HA_TO_TRU" 

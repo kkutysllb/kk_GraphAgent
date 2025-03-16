@@ -20,11 +20,14 @@ from neo4j import GraphDatabase
 from typing import Dict, List
 import os
 from datetime import datetime
+from rag.utils.config import get_database_config
+
+db_config = get_database_config()
 
 class SampleDataExtractor:
-    def __init__(self, uri: str = "bolt://localhost:7687", 
-                 user: str = "neo4j", 
-                 password: str = "Oms_2600a",
+    def __init__(self, uri: str = db_config.get('uri'), 
+                 user: str = db_config.get('user'), 
+                 password: str = db_config.get('password'),
                  sample_size: int = 5):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.sample_size = sample_size

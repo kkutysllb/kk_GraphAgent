@@ -14,6 +14,11 @@ from typing import Dict, List, Tuple, Any, Optional
 from neo4j import GraphDatabase
 from utils.logger import Logger
 from tqdm import tqdm
+import threading
+
+# 添加全局锁，用于控制日志输出
+_log_lock = threading.Lock()
+_connection_logged = False
 
 class Neo4jGraphManager:
     """Neo4j图数据库管理器
@@ -48,6 +53,8 @@ class Neo4jGraphManager:
     
     def connect(self):
         """连接到Neo4j数据库"""
+        global _connection_logged
+        
         try:
             self._driver = GraphDatabase.driver(
                 self.uri,
@@ -56,7 +63,12 @@ class Neo4jGraphManager:
             with self._driver.session() as session:
                 result = session.run("MATCH (n) RETURN count(n) as count")
                 count = result.single()["count"]
-                self.logger.info(f"成功连接Neo4j数据库，当前数据库包含 {count} 个节点")
+                
+                # 使用线程锁控制日志输出，避免多线程重复打印
+                with _log_lock:
+                    if not _connection_logged:
+                        self.logger.info(f"成功连接Neo4j数据库，当前数据库包含 {count} 个节点")
+                        _connection_logged = True
         except Exception as e:
             self.logger.error(f"连接Neo4j数据库失败: {str(e)}")
             raise

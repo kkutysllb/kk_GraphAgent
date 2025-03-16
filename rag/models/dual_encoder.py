@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 # --------------------------------------------------------
-# @Author : ${1:kkutysllb
+# @Author : kkutysllb
 # @E-mail : libing1@sn.chinamobile.com, 31468130@qq.com
 # @Date   : 2025-03-15 09:40
-# @Desc   : Dual encoder module that combines text and graph encoders.
+# @Desc   : 混合文本和图编码器的双编码器模块
 # --------------------------------------------------------
 """
 
@@ -17,7 +17,7 @@ from .text_encoder import TextEncoder
 from .dynamic_heterogeneous_graph_encoder import DynamicHeterogeneousGraphEncoder
 
 class DualEncoder(nn.Module):
-    """Dual encoder combining text and graph encoders"""
+    """混合文本和图编码器的双编码器模块"""
     
     def __init__(
         self,
@@ -37,27 +37,27 @@ class DualEncoder(nn.Module):
         num_hierarchies: int = 7
     ):
         """
-        Initialize dual encoder
+        初始化双编码器
         
         Args:
-            text_model_name: Name of pre-trained text model
-            node_dim: Input node feature dimension
-            edge_dim: Input edge feature dimension
-            time_series_dim: Input time series feature dimension
-            hidden_dim: Hidden dimension
-            output_dim: Output dimension
-            num_layers: Number of graph layers
-            num_heads: Number of attention heads
-            dropout: Dropout rate
-            freeze_text: Whether to freeze text encoder
-            node_types: List of node types
-            edge_types: List of edge types
-            seq_len: Length of time series sequence
-            num_hierarchies: Number of hierarchy levels
+            text_model_name: 预训练文本模型名称
+            node_dim: 输入节点特征维度
+            edge_dim: 输入边特征维度
+            time_series_dim: 输入时间序列特征维度
+            hidden_dim: 隐藏维度
+            output_dim: 输出维度
+            num_layers: 图层数
+            num_heads: 注意力头数
+            dropout: 丢弃率
+            freeze_text: 是否冻结文本编码器
+            node_types: 节点类型列表
+            edge_types: 边类型列表
+            seq_len: 时间序列序列长度
+            num_hierarchies: 层次级别数
         """
         super().__init__()
         
-        # Text encoder
+        # 文本编码器
         self.text_encoder = TextEncoder(
             model_name=text_model_name,
             output_dim=output_dim,
@@ -65,7 +65,7 @@ class DualEncoder(nn.Module):
             freeze_base=freeze_text
         )
         
-        # Graph encoder
+        # 图编码器
         self.graph_encoder = DynamicHeterogeneousGraphEncoder(
             node_types=node_types,
             edge_types=edge_types,
@@ -81,7 +81,7 @@ class DualEncoder(nn.Module):
             num_hierarchies=num_hierarchies
         )
         
-        # Alignment projection
+        # 对齐投影
         self.text_projection = nn.Sequential(
             nn.Linear(output_dim, output_dim),
             nn.LayerNorm(output_dim),
@@ -101,24 +101,24 @@ class DualEncoder(nn.Module):
         token_type_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Encode text input
+        编码文本输入
         
         Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            token_type_ids: Token type IDs
+            input_ids: 输入token IDs
+            attention_mask: 注意力掩码
+            token_type_ids: token类型IDs
             
         Returns:
-            Dictionary containing text embeddings
+            包含文本嵌入的字典
         """
-        # Get text embeddings
+        # 获取文本嵌入
         text_outputs = self.text_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids
         )
         
-        # Project embeddings
+        # 投影嵌入
         text_embedding = self.text_projection(text_outputs['pooled'])
         
         return {
@@ -136,20 +136,20 @@ class DualEncoder(nn.Module):
         batch: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Encode graph input
+        编码图输入
         
         Args:
-            node_features: Node feature matrix
-            edge_indices_dict: Dictionary of edge indices by edge type
-            edge_features_dict: Dictionary of edge features by edge type
-            time_series_features: Time series features
-            node_hierarchies: Node hierarchy information
-            batch: Batch assignment matrix
+            node_features: 节点特征矩阵
+            edge_indices_dict: 边索引字典
+            edge_features_dict: 边特征字典
+            time_series_features: 时间序列特征
+            node_hierarchies: 节点层次信息
+            batch: 批量分配矩阵
             
         Returns:
-            Dictionary containing graph embeddings
+            包含图嵌入的字典
         """
-        # Get graph embeddings
+        # 获取图嵌入
         graph_outputs = self.graph_encoder(
             node_features=node_features,
             edge_indices_dict=edge_indices_dict,
@@ -159,7 +159,7 @@ class DualEncoder(nn.Module):
             batch=batch
         )
         
-        # Project embeddings
+        # 投影嵌入
         graph_embedding = self.graph_projection(graph_outputs['graph_embedding'])
         
         return {
@@ -180,26 +180,26 @@ class DualEncoder(nn.Module):
         token_type_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            node_features: Node feature matrix
-            edge_indices_dict: Dictionary of edge indices by edge type
-            edge_features_dict: Dictionary of edge features by edge type
-            time_series_features: Time series features
-            node_hierarchies: Node hierarchy information
-            batch: Batch assignment matrix
-            token_type_ids: Token type IDs
+            input_ids: 输入token IDs
+            attention_mask: 注意力掩码
+            node_features: 节点特征矩阵
+            edge_indices_dict: 边索引字典
+            edge_features_dict: 边特征字典
+            time_series_features: 时间序列特征
+            node_hierarchies: 节点层次信息
+            batch: 批量分配矩阵
+            token_type_ids: token类型IDs
             
         Returns:
-            Dictionary containing:
-                - text_embedding: Text embedding
-                - graph_embedding: Graph embedding
-                - similarity: Cosine similarity between embeddings
+            包含:
+                - text_embedding: 文本嵌入
+                - graph_embedding: 图嵌入
+                - similarity: 嵌入之间的余弦相似度
         """
-        # Encode text and graph
+        # 编码文本和图
         text_outputs = self.encode_text(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -215,11 +215,11 @@ class DualEncoder(nn.Module):
             batch=batch
         )
         
-        # Get embeddings
+        # 获取嵌入
         text_embedding = text_outputs['text_embedding']
         graph_embedding = graph_outputs['graph_embedding']
         
-        # Compute similarity
+        # 计算相似度
         similarity = torch.cosine_similarity(
             text_embedding.unsqueeze(1),
             graph_embedding.unsqueeze(0),
@@ -235,5 +235,5 @@ class DualEncoder(nn.Module):
         }
         
     def get_embedding_dim(self) -> int:
-        """Get embedding dimension"""
+        """获取嵌入维度"""
         return self.text_encoder.get_embedding_dim() 

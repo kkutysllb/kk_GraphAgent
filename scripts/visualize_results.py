@@ -21,7 +21,9 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # Mac系统推荐字体
+# plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # Mac系统推荐字体
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['WQY-Microhei']  # 使用文泉驿微米黑字体
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 创建控制台对象

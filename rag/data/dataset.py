@@ -9,21 +9,28 @@
 # --------------------------------------------------------
 """
 
-
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Counter
 import json
 import logging
 import random
 from tqdm import tqdm
+import math
+from collections import defaultdict
+import threading
 
 from ..feature_extractor import FeatureExtractor
 from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
 from ..utils.logging import LoggerMixin
 
 logger = logging.getLogger(__name__)
+
+# 添加全局锁，用于控制日志输出
+_dataset_log_lock = threading.Lock()
+_node_loading_logged = {}
+_edge_loading_logged = {}
 
 class GraphTextDataset(Dataset, LoggerMixin):
     """用于生成图和文本数据集的类"""
@@ -39,7 +46,12 @@ class GraphTextDataset(Dataset, LoggerMixin):
         max_edge_size: int = 200,
         include_dynamic: bool = True,
         data_augmentation: bool = True,
-        split: str = "train"
+        balance_node_types: bool = True,
+        adaptive_subgraph_size: bool = True,
+        negative_sample_ratio: float = 0.5,
+        split: str = "train",
+        split_ratio: Dict[str, float] = {"train": 0.8, "val": 0.1, "test": 0.1},
+        seed: int = 42
     ):
         """
         初始化数据集
@@ -54,8 +66,15 @@ class GraphTextDataset(Dataset, LoggerMixin):
             max_edge_size: 子图中的最大边数
             include_dynamic: 是否包含动态特征
             data_augmentation: 是否应用数据增强
+            balance_node_types: 是否平衡不同节点类型的样本数量
+            adaptive_subgraph_size: 是否根据节点类型自适应调整子图大小
+            negative_sample_ratio: 负样本比例
             split: 数据集分割（"train", "val", or "test"）
+            split_ratio: 数据集分割比例
+            seed: 随机种子
         """
+        global _dataset_log_lock
+        
         super().__init__()
         self.graph_manager = graph_manager
         self.feature_extractor = feature_extractor
@@ -66,25 +85,71 @@ class GraphTextDataset(Dataset, LoggerMixin):
         self.max_edge_size = max_edge_size
         self.include_dynamic = include_dynamic
         self.data_augmentation = data_augmentation
+        self.balance_node_types = balance_node_types
+        self.adaptive_subgraph_size = adaptive_subgraph_size
+        self.negative_sample_ratio = negative_sample_ratio
         self.split = split
+        self.split_ratio = split_ratio
+        self.seed = seed
+        
+        # 设置随机种子
+        random.seed(seed)
+        np.random.seed(seed)
         
         # 记载图数据
         self.nodes, self.edges = self._load_graph_data()
         
         # 生成文本描述
+        with _dataset_log_lock:
+            self.log_info("生成节点文本描述...")
         self.text_descriptions = self._generate_text_descriptions()
         
         # 创建图-文对
+        with _dataset_log_lock:
+            self.log_info("Creating graph-text pairs...")
         self.pairs = self._create_pairs()
         
-        # 记录数据集统计信息
-        self.log_info(f"Created {split} dataset with {len(self.pairs)} graph-text pairs")
-        self.log_info(f"Node types: {self.node_types}")
-        self.log_info(f"Edge types: {self.edge_types}")
+        # 应用数据集分割
+        self.pairs = self._apply_dataset_split()
         
+        # 平衡节点类型（如果启用）
+        if self.balance_node_types and self.split == "train":
+            self.pairs = self._balance_node_types()
+        
+        # 生成负样本（如果启用）
+        if self.negative_sample_ratio > 0 and self.split == "train":
+            negative_pairs = self._generate_negative_samples()
+            self.pairs.extend(negative_pairs)
+            with _dataset_log_lock:
+                self.log_info(f"Added {len(negative_pairs)} negative samples")
+        
+        # 记录数据集统计信息
+        with _dataset_log_lock:
+            self.log_info(f"Created {split} dataset with {len(self.pairs)} graph-text pairs")
+            self.log_info(f"Node types: {self.node_types}")
+            self.log_info(f"Edge types: {self.edge_types}")
+            
+            # 统计节点类型分布
+            node_type_counts = Counter([pair["node_type"] for pair in self.pairs])
+            for node_type, count in node_type_counts.items():
+                self.log_info(f"Node type {node_type}: {count} samples")
+            
+            # 统计正负样本比例
+            if self.negative_sample_ratio > 0 and self.split == "train":
+                positive_count = sum(1 for pair in self.pairs if not pair.get("is_negative", False))
+                negative_count = sum(1 for pair in self.pairs if pair.get("is_negative", False))
+                self.log_info(f"Positive samples: {positive_count}, Negative samples: {negative_count}")
+                self.log_info(f"Positive:Negative ratio = {positive_count}:{negative_count} = {positive_count/negative_count:.2f}")
+    
     def _load_graph_data(self) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
         """从Neo4j加载节点和边及其特征"""
-        self.log_info("从Neo4j加载图数据...")
+        global _dataset_log_lock, _node_loading_logged, _edge_loading_logged
+        
+        # 使用线程锁控制日志输出
+        with _dataset_log_lock:
+            if self.split not in _node_loading_logged:
+                self.log_info("从Neo4j加载图数据...")
+                _node_loading_logged[self.split] = True
         
         # 按类型获取节点及其特征
         nodes = {}
@@ -135,13 +200,16 @@ class GraphTextDataset(Dataset, LoggerMixin):
                         "features": features
                     }
         
-        self.log_info(f"Loaded {len(nodes)} nodes and {len(edges)} edges")
+        # 使用线程锁控制日志输出
+        with _dataset_log_lock:
+            if self.split not in _edge_loading_logged:
+                self.log_info(f"Loaded {len(nodes)} nodes and {len(edges)} edges")
+                _edge_loading_logged[self.split] = True
+        
         return nodes, edges
     
     def _generate_text_descriptions(self) -> Dict[str, str]:
         """生成节点文本描述""" 
-        self.log_info("生成节点文本描述...")
-        
         descriptions = {}
         for node_id, node in tqdm(self.nodes.items(), desc="生成描述"):
             # 从特征获取节点属性
@@ -721,8 +789,6 @@ class GraphTextDataset(Dataset, LoggerMixin):
     
     def _create_pairs(self) -> List[Dict]:
         """Create graph-text pairs for training"""
-        self.log_info("Creating graph-text pairs...")
-        
         pairs = []
         for node_id, node in tqdm(self.nodes.items(), desc="Creating pairs"):
             if node_id in self.text_descriptions:
@@ -734,7 +800,8 @@ class GraphTextDataset(Dataset, LoggerMixin):
                     'node_id': node_id,
                     'text': self.text_descriptions[node_id],
                     'subgraph': subgraph,
-                    'node_type': node["type"]
+                    'node_type': node["type"],
+                    'is_negative': False  # 标记为正样本
                 }
                 pairs.append(pair)
         
@@ -752,43 +819,427 @@ class GraphTextDataset(Dataset, LoggerMixin):
         subgraph_nodes = {center_node_id: self.nodes[center_node_id]}
         subgraph_edges = {}
         
+        # 获取节点类型
+        node_type = self.nodes[center_node_id]["type"]
+        
+        # 根据节点类型自适应调整子图大小
+        max_node_size = self.max_node_size
+        max_edge_size = self.max_edge_size
+        
+        if self.adaptive_subgraph_size:
+            # 为稀有节点类型增加子图大小
+            if node_type in ["DC", "HA", "TRU"]:
+                max_node_size = min(200, self.max_node_size * 2)
+                max_edge_size = min(200, self.max_edge_size * 2)
+            # 为常见节点类型减小子图大小
+            elif node_type in ["VM"]:
+                max_node_size = max(20, int(self.max_node_size * 0.8))
+                max_edge_size = max(20, int(self.max_edge_size * 0.8))
+        
+        # 计算节点重要性分数
+        node_importance = self._calculate_node_importance()
+        
         # Add 1-hop neighbors
+        neighbor_scores = []
         for edge_key, edge in self.edges.items():
             if edge["source"] == center_node_id:
                 target_id = edge["target"]
                 if target_id in self.nodes:
-                    subgraph_nodes[target_id] = self.nodes[target_id]
-                    subgraph_edges[edge_key] = edge
+                    importance = node_importance.get(target_id, 1.0)
+                    neighbor_scores.append((target_id, edge_key, importance))
             elif edge["target"] == center_node_id:
                 source_id = edge["source"]
                 if source_id in self.nodes:
-                    subgraph_nodes[source_id] = self.nodes[source_id]
-                    subgraph_edges[edge_key] = edge
+                    importance = node_importance.get(source_id, 1.0)
+                    neighbor_scores.append((source_id, edge_key, importance))
+        
+        # 按重要性排序邻居节点
+        neighbor_scores.sort(key=lambda x: x[2], reverse=True)
+        
+        # 添加重要的邻居节点
+        for neighbor_id, edge_key, _ in neighbor_scores:
+            if len(subgraph_nodes) >= max_node_size or len(subgraph_edges) >= max_edge_size:
+                break
+            
+            subgraph_nodes[neighbor_id] = self.nodes[neighbor_id]
+            
+            # 找到对应的边
+            for e_key, edge in self.edges.items():
+                if (edge["source"] == center_node_id and edge["target"] == neighbor_id) or \
+                   (edge["target"] == center_node_id and edge["source"] == neighbor_id):
+                    subgraph_edges[e_key] = edge
+                    break
         
         # Add 2-hop neighbors (limited by max_node_size and max_edge_size)
-        if len(subgraph_nodes) < self.max_node_size and len(subgraph_edges) < self.max_edge_size:
+        if len(subgraph_nodes) < max_node_size and len(subgraph_edges) < max_edge_size:
+            two_hop_neighbors = []
+            
             for node_id in list(subgraph_nodes.keys()):
                 if node_id != center_node_id:  # Skip center node (already processed)
                     for edge_key, edge in self.edges.items():
-                        if len(subgraph_nodes) >= self.max_node_size or len(subgraph_edges) >= self.max_edge_size:
-                            break
-                        
                         if edge["source"] == node_id and edge["target"] not in subgraph_nodes:
                             target_id = edge["target"]
                             if target_id in self.nodes:
-                                subgraph_nodes[target_id] = self.nodes[target_id]
-                                subgraph_edges[edge_key] = edge
+                                importance = node_importance.get(target_id, 1.0)
+                                two_hop_neighbors.append((target_id, edge_key, importance))
                         elif edge["target"] == node_id and edge["source"] not in subgraph_nodes:
                             source_id = edge["source"]
                             if source_id in self.nodes:
-                                subgraph_nodes[source_id] = self.nodes[source_id]
-                                subgraph_edges[edge_key] = edge
+                                importance = node_importance.get(source_id, 1.0)
+                                two_hop_neighbors.append((source_id, edge_key, importance))
+            
+            # 按重要性排序二阶邻居
+            two_hop_neighbors.sort(key=lambda x: x[2], reverse=True)
+            
+            # 添加重要的二阶邻居
+            for neighbor_id, edge_key, _ in two_hop_neighbors:
+                if len(subgraph_nodes) >= max_node_size or len(subgraph_edges) >= max_edge_size:
+                    break
+                
+                subgraph_nodes[neighbor_id] = self.nodes[neighbor_id]
+                
+                # 找到对应的边
+                edge = self.edges.get(edge_key)
+                if edge:
+                    subgraph_edges[edge_key] = edge
         
         return {
             'nodes': subgraph_nodes,
             'edges': subgraph_edges,
             'center_node_id': center_node_id
         }
+    
+    def _calculate_node_importance(self) -> Dict[str, float]:
+        """计算节点重要性分数"""
+        # 初始化节点重要性
+        importance = {}
+        
+        # 计算节点的度
+        node_degrees = defaultdict(int)
+        for edge in self.edges.values():
+            node_degrees[edge["source"]] += 1
+            node_degrees[edge["target"]] += 1
+        
+        # 计算节点类型的稀有度
+        node_type_counts = Counter([node["type"] for node in self.nodes.values()])
+        type_rarity = {
+            node_type: 1.0 / (count + 1) 
+            for node_type, count in node_type_counts.items()
+        }
+        
+        # 计算节点重要性分数
+        for node_id, node in self.nodes.items():
+            # 基于度和节点类型稀有度的重要性
+            degree = node_degrees.get(node_id, 0)
+            rarity = type_rarity.get(node["type"], 1.0)
+            
+            # 重要性分数 = 度 * 稀有度
+            importance[node_id] = degree * rarity
+            
+            # 为特定类型的节点增加重要性
+            if node["type"] in ["DC", "HA", "TRU"]:
+                importance[node_id] *= 2.0
+        
+        # 归一化重要性分数
+        max_importance = max(importance.values()) if importance else 1.0
+        for node_id in importance:
+            importance[node_id] /= max_importance
+        
+        return importance
+    
+    def _apply_dataset_split(self) -> List[Dict]:
+        """应用数据集分割"""
+        global _dataset_log_lock
+        
+        if self.split not in ["train", "val", "test"]:
+            raise ValueError(f"Invalid split: {self.split}")
+        
+        # 按节点类型分组
+        pairs_by_type = defaultdict(list)
+        for pair in self.pairs:
+            pairs_by_type[pair["node_type"]].append(pair)
+        
+        # 为每种节点类型应用分割
+        split_pairs = []
+        for node_type, type_pairs in pairs_by_type.items():
+            # 打乱顺序
+            random.shuffle(type_pairs)
+            
+            # 计算分割点
+            train_end = int(len(type_pairs) * self.split_ratio["train"])
+            val_end = train_end + int(len(type_pairs) * self.split_ratio["val"])
+            
+            # 根据当前分割选择对应的数据
+            if self.split == "train":
+                split_pairs.extend(type_pairs[:train_end])
+            elif self.split == "val":
+                split_pairs.extend(type_pairs[train_end:val_end])
+            else:  # test
+                split_pairs.extend(type_pairs[val_end:])
+        
+        with _dataset_log_lock:
+            self.log_info(f"Applied {self.split} split: {len(split_pairs)}/{len(self.pairs)} pairs")
+        return split_pairs
+    
+    def _balance_node_types(self) -> List[Dict]:
+        """平衡不同节点类型的样本数量"""
+        global _dataset_log_lock
+        
+        # 按节点类型分组
+        pairs_by_type = defaultdict(list)
+        for pair in self.pairs:
+            pairs_by_type[pair["node_type"]].append(pair)
+        
+        # 找出最多样本的类型
+        max_count = max(len(pairs) for pairs in pairs_by_type.values())
+        
+        # 平衡各类型样本数量
+        balanced_pairs = []
+        for node_type, type_pairs in pairs_by_type.items():
+            # 对于样本较少的类型，通过过采样增加样本
+            if len(type_pairs) < max_count:
+                # 计算需要复制的次数
+                repeat_factor = math.ceil(max_count / len(type_pairs))
+                
+                # 复制样本
+                augmented_pairs = []
+                for _ in range(repeat_factor):
+                    # 每次复制时稍微打乱顺序
+                    shuffled = type_pairs.copy()
+                    random.shuffle(shuffled)
+                    augmented_pairs.extend(shuffled)
+                
+                # 截取所需数量
+                balanced_pairs.extend(augmented_pairs[:max_count])
+                with _dataset_log_lock:
+                    self.log_info(f"Balanced {node_type}: {len(type_pairs)} -> {max_count} samples")
+            else:
+                # 对于样本较多的类型，保持不变
+                balanced_pairs.extend(type_pairs)
+        
+        return balanced_pairs
+    
+    def _generate_negative_samples(self) -> List[Dict]:
+        """生成负样本"""
+        global _dataset_log_lock
+        
+        negative_pairs = []
+        positive_count = len(self.pairs)
+        target_negative_count = int(positive_count * self.negative_sample_ratio)
+        
+        with _dataset_log_lock:
+            self.log_info(f"Generating {target_negative_count} negative samples...")
+        
+        # 按节点类型分组
+        pairs_by_type = defaultdict(list)
+        for pair in self.pairs:
+            pairs_by_type[pair["node_type"]].append(pair)
+        
+        # 为每种节点类型生成负样本
+        for node_type, type_pairs in pairs_by_type.items():
+            # 计算该类型需要生成的负样本数量
+            type_ratio = len(type_pairs) / positive_count
+            type_negative_count = int(target_negative_count * type_ratio)
+            
+            # 生成三种类型的负样本
+            
+            # 1. 文本-图不匹配负样本
+            text_graph_mismatch = self._generate_text_graph_mismatch(type_pairs, int(type_negative_count * 0.4))
+            negative_pairs.extend(text_graph_mismatch)
+            
+            # 2. 困难负样本（同类型不同节点）
+            hard_negatives = self._generate_hard_negatives(type_pairs, int(type_negative_count * 0.4))
+            negative_pairs.extend(hard_negatives)
+            
+            # 3. 子图扰动负样本
+            subgraph_perturbation = self._generate_subgraph_perturbation(type_pairs, int(type_negative_count * 0.2))
+            negative_pairs.extend(subgraph_perturbation)
+        
+        return negative_pairs
+    
+    def _generate_text_graph_mismatch(self, pairs: List[Dict], count: int) -> List[Dict]:
+        """生成文本-图不匹配的负样本"""
+        if len(pairs) < 2:
+            return []
+        
+        negative_pairs = []
+        for _ in range(min(count, len(pairs))):
+            # 随机选择一个样本
+            pair = random.choice(pairs)
+            
+            # 随机选择一个不同的文本
+            other_pairs = [p for p in pairs if p["node_id"] != pair["node_id"]]
+            if not other_pairs:
+                continue
+            
+            other_pair = random.choice(other_pairs)
+            
+            # 创建负样本：使用原图和不匹配的文本
+            negative_pair = {
+                'node_id': pair["node_id"],
+                'text': other_pair["text"],
+                'subgraph': pair["subgraph"],
+                'node_type': pair["node_type"],
+                'is_negative': True,
+                'negative_type': 'text_graph_mismatch'
+            }
+            
+            negative_pairs.append(negative_pair)
+        
+        return negative_pairs
+    
+    def _generate_hard_negatives(self, pairs: List[Dict], count: int) -> List[Dict]:
+        """生成困难负样本（同类型不同节点）"""
+        if len(pairs) < 2:
+            return []
+        
+        # 计算节点相似度
+        node_similarities = {}
+        for i, pair1 in enumerate(pairs):
+            for j, pair2 in enumerate(pairs):
+                if i >= j:
+                    continue
+                
+                # 计算两个节点的相似度
+                similarity = self._calculate_node_similarity(pair1, pair2)
+                node_similarities[(pair1["node_id"], pair2["node_id"])] = similarity
+        
+        # 按相似度排序
+        sorted_similarities = sorted(
+            node_similarities.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        # 生成困难负样本
+        negative_pairs = []
+        for (node_id1, node_id2), similarity in sorted_similarities[:count]:
+            # 找到对应的样本
+            pair1 = next(p for p in pairs if p["node_id"] == node_id1)
+            pair2 = next(p for p in pairs if p["node_id"] == node_id2)
+            
+            # 创建负样本：使用相似节点的文本和图
+            negative_pair = {
+                'node_id': pair1["node_id"],
+                'text': pair2["text"],
+                'subgraph': pair1["subgraph"],
+                'node_type': pair1["node_type"],
+                'is_negative': True,
+                'negative_type': 'hard_negative',
+                'similarity': similarity
+            }
+            
+            negative_pairs.append(negative_pair)
+        
+        return negative_pairs
+    
+    def _calculate_node_similarity(self, pair1: Dict, pair2: Dict) -> float:
+        """计算两个节点的相似度"""
+        # 简单实现：基于共同邻居的比例
+        nodes1 = set(pair1["subgraph"]["nodes"].keys())
+        nodes2 = set(pair2["subgraph"]["nodes"].keys())
+        
+        # 计算Jaccard相似度
+        intersection = len(nodes1.intersection(nodes2))
+        union = len(nodes1.union(nodes2))
+        
+        if union == 0:
+            return 0.0
+        
+        return intersection / union
+    
+    def _generate_subgraph_perturbation(self, pairs: List[Dict], count: int) -> List[Dict]:
+        """生成子图扰动负样本"""
+        negative_pairs = []
+        
+        for _ in range(min(count, len(pairs))):
+            # 随机选择一个样本
+            pair = random.choice(pairs)
+            
+            # 复制子图
+            perturbed_subgraph = {
+                'nodes': pair["subgraph"]["nodes"].copy(),
+                'edges': pair["subgraph"]["edges"].copy(),
+                'center_node_id': pair["subgraph"]["center_node_id"]
+            }
+            
+            # 扰动子图：随机删除一些节点和边，并添加一些不相关的节点和边
+            self._perturb_subgraph(perturbed_subgraph)
+            
+            # 创建负样本
+            negative_pair = {
+                'node_id': pair["node_id"],
+                'text': pair["text"],
+                'subgraph': perturbed_subgraph,
+                'node_type': pair["node_type"],
+                'is_negative': True,
+                'negative_type': 'subgraph_perturbation'
+            }
+            
+            negative_pairs.append(negative_pair)
+        
+        return negative_pairs
+    
+    def _perturb_subgraph(self, subgraph: Dict) -> None:
+        """扰动子图结构"""
+        # 保留中心节点
+        center_node_id = subgraph["center_node_id"]
+        
+        # 随机删除30%的非中心节点
+        nodes_to_remove = []
+        for node_id in subgraph["nodes"]:
+            if node_id != center_node_id and random.random() < 0.3:
+                nodes_to_remove.append(node_id)
+        
+        for node_id in nodes_to_remove:
+            if node_id in subgraph["nodes"]:
+                del subgraph["nodes"][node_id]
+        
+        # 删除与已删除节点相连的边
+        edges_to_remove = []
+        for edge_key, edge in subgraph["edges"].items():
+            if edge["source"] in nodes_to_remove or edge["target"] in nodes_to_remove:
+                edges_to_remove.append(edge_key)
+        
+        for edge_key in edges_to_remove:
+            if edge_key in subgraph["edges"]:
+                del subgraph["edges"][edge_key]
+        
+        # 添加一些随机节点（从全局节点中选择）
+        available_nodes = [
+            node_id for node_id in self.nodes
+            if node_id not in subgraph["nodes"] and node_id != center_node_id
+        ]
+        
+        if available_nodes:
+            num_to_add = min(5, len(available_nodes))
+            for _ in range(num_to_add):
+                if not available_nodes:
+                    break
+                
+                random_node_id = random.choice(available_nodes)
+                available_nodes.remove(random_node_id)
+                
+                subgraph["nodes"][random_node_id] = self.nodes[random_node_id]
+        
+        # 添加一些随机边（从全局边中选择）
+        available_edges = [
+            edge_key for edge_key, edge in self.edges.items()
+            if edge_key not in subgraph["edges"] and
+            edge["source"] in subgraph["nodes"] and
+            edge["target"] in subgraph["nodes"]
+        ]
+        
+        if available_edges:
+            num_to_add = min(5, len(available_edges))
+            for _ in range(num_to_add):
+                if not available_edges:
+                    break
+                
+                random_edge_key = random.choice(available_edges)
+                available_edges.remove(random_edge_key)
+                
+                subgraph["edges"][random_edge_key] = self.edges[random_edge_key]
     
     def _apply_data_augmentation(self, pairs: List[Dict]) -> List[Dict]:
         """Apply data augmentation to create more training pairs"""
@@ -802,11 +1253,25 @@ class GraphTextDataset(Dataset, LoggerMixin):
                 augmented_pair["text"] = masked_text
                 augmented_pairs.append(augmented_pair)
             
-            # 2. Subgraph augmentation: random node dropout
+            # 2. Text augmentation: synonym replacement
+            synonym_text = self._replace_with_synonyms(pair["text"])
+            if synonym_text != pair["text"]:
+                augmented_pair = pair.copy()
+                augmented_pair["text"] = synonym_text
+                augmented_pairs.append(augmented_pair)
+            
+            # 3. Subgraph augmentation: random node dropout
             augmented_subgraph = self._random_node_dropout(pair["subgraph"])
             if augmented_subgraph != pair["subgraph"]:
                 augmented_pair = pair.copy()
                 augmented_pair["subgraph"] = augmented_subgraph
+                augmented_pairs.append(augmented_pair)
+            
+            # 4. Subgraph augmentation: edge perturbation
+            perturbed_subgraph = self._edge_perturbation(pair["subgraph"])
+            if perturbed_subgraph != pair["subgraph"]:
+                augmented_pair = pair.copy()
+                augmented_pair["subgraph"] = perturbed_subgraph
                 augmented_pairs.append(augmented_pair)
         
         return augmented_pairs
@@ -823,6 +1288,44 @@ class GraphTextDataset(Dataset, LoggerMixin):
                 masked_words.append(word)
         
         return " ".join(masked_words)
+    
+    def _replace_with_synonyms(self, text: str, replace_prob: float = 0.1) -> str:
+        """Replace words with synonyms"""
+        # 简单的同义词替换（实际应用中可以使用更复杂的同义词库）
+        synonyms = {
+            "数据中心": ["数据中心", "DC", "机房"],
+            "租户": ["租户", "客户", "用户"],
+            "网元": ["网元", "NE", "网络设备"],
+            "虚拟机": ["虚拟机", "VM", "云主机"],
+            "主机": ["主机", "服务器", "物理机"],
+            "高可用": ["高可用", "主机组", "HA", "容灾"],
+            "存储": ["存储", "存储单元", "TRU"],
+            "CPU": ["CPU", "处理器", "计算资源"],
+            "内存": ["内存", "RAM", "存储资源"],
+            "磁盘": ["磁盘", "硬盘", "存储设备"],
+            "网络": ["网络", "网络连接", "通信"],
+            "状态": ["状态", "运行状态", "工作状态"],
+            "告警": ["告警", "警报", "异常提示"],
+            "日志": ["日志", "记录", "系统记录"],
+            "指标": ["指标", "性能指标", "监控指标"]
+        }
+        
+        words = text.split()
+        replaced_words = []
+        
+        for word in words:
+            if random.random() < replace_prob:
+                # 查找可能的同义词
+                for key, values in synonyms.items():
+                    if key in word:
+                        # 随机选择一个同义词替换
+                        replacement = random.choice(values)
+                        word = word.replace(key, replacement)
+                        break
+            
+            replaced_words.append(word)
+        
+        return " ".join(replaced_words)
     
     def _random_node_dropout(self, subgraph: Dict, dropout_prob: float = 0.2) -> Dict:
         """Randomly drop nodes from the subgraph (except the center node)"""
@@ -859,7 +1362,62 @@ class GraphTextDataset(Dataset, LoggerMixin):
             'edges': edges,
             'center_node_id': center_node_id
         }
+    
+    def _edge_perturbation(self, subgraph: Dict, perturb_prob: float = 0.1) -> Dict:
+        """Perturb edges in the subgraph"""
+        nodes = subgraph["nodes"].copy()
+        edges = subgraph["edges"].copy()
+        center_node_id = subgraph["center_node_id"]
         
+        # 随机删除一些边
+        edges_to_remove = []
+        for edge_key, edge in edges.items():
+            # 保留与中心节点相连的边
+            if edge["source"] == center_node_id or edge["target"] == center_node_id:
+                continue
+                
+            if random.random() < perturb_prob:
+                edges_to_remove.append(edge_key)
+        
+        for edge_key in edges_to_remove:
+            if edge_key in edges:
+                del edges[edge_key]
+        
+        # 随机添加一些边
+        node_ids = list(nodes.keys())
+        for _ in range(int(len(edges) * perturb_prob)):
+            if len(node_ids) < 2:
+                break
+                
+            # 随机选择两个节点
+            source_id = random.choice(node_ids)
+            target_id = random.choice([n for n in node_ids if n != source_id])
+            
+            # 检查边是否已存在
+            edge_exists = False
+            for edge in edges.values():
+                if (edge["source"] == source_id and edge["target"] == target_id) or \
+                   (edge["source"] == target_id and edge["target"] == source_id):
+                    edge_exists = True
+                    break
+            
+            if not edge_exists:
+                # 创建新边
+                edge_key = f"{source_id}->{target_id}"
+                edges[edge_key] = {
+                    "id": edge_key,
+                    "source": source_id,
+                    "target": target_id,
+                    "type": random.choice(self.edge_types),
+                    "features": {}  # 简化的特征
+                }
+        
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'center_node_id': center_node_id
+        }
+    
     def __len__(self) -> int:
         return len(self.pairs)
         

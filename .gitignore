@@ -89,3 +89,21 @@ transaction.db.*
 # OS
 .DS_Store
 Thumbs.db
+
+# Test results
+test_results/
+
+# Datasets
+datasets/
+
+# Large files (>10MB)
+**/chain_feature_samples.json
+**/negative_samples_text_graph_mismatch_examples.json
+**/negative_samples_subgraph_perturbation_examples.json
+**/sample_graph_data.json
+**/metrics_data.json
+**/graph_data_with_logs.json
+**/metrics_intermediate.json
+**/edge_dynamics_intermediate.json
+**/graph_data_complete.json
+**/graph_data_with_metrics.json

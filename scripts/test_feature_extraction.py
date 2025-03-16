@@ -12,15 +12,18 @@ from rag.feature_extractor import FeatureExtractor
 from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
 import json
 from pprint import pprint
+from rag.utils.config import get_database_config
+
+db_config = get_database_config()
 
 def test_node_feature_extraction():
     """测试节点特征提取"""
     
     # 初始化Neo4j连接和特征提取器
     graph_manager = Neo4jGraphManager(
-        uri="bolt://localhost:7687",
-        user="neo4j",
-        password="Oms_2600a"
+        uri=db_config.get('uri'),
+        user=db_config.get('user'),
+        password=db_config.get('password')
     )
     
     extractor = FeatureExtractor(graph_manager)
@@ -69,9 +72,9 @@ def test_edge_feature_extraction():
     
     # 初始化Neo4j连接和特征提取器
     graph_manager = Neo4jGraphManager(
-        uri="bolt://localhost:7687",
-        user="neo4j",
-        password="Oms_2600a"
+        uri=db_config.get('uri'),
+        user=db_config.get('user'),
+        password=db_config.get('password')
     )
     
     extractor = FeatureExtractor(graph_manager)

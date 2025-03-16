@@ -5,7 +5,7 @@
 # @Author : kkutysllb
 # @E-mail : libing1@sn.chinamobile.com, 31468130@qq.com
 # @Date   : 2025-03-15 09:40
-# @Desc   : Loss module with contrastive learning and other loss functions.
+# @Desc   : 损失模块，包含对比学习和其他损失函数。
 # --------------------------------------------------------
 """
 
@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from typing import Dict, Optional, List, Union, Tuple
 
 class ContrastiveLoss(nn.Module):
-    """Contrastive loss for similarity learning"""
+    """对比损失用于相似性学习"""
     
     def __init__(
         self,
@@ -23,11 +23,11 @@ class ContrastiveLoss(nn.Module):
         reduction: str = "mean"
     ):
         """
-        Initialize contrastive loss
+        初始化对比损失
         
         Args:
-            temperature: Temperature parameter
-            reduction: Reduction method (mean or sum)
+            temperature: 温度参数
+            reduction: 减少方法（mean或sum）
         """
         super().__init__()
         self.temperature = temperature
@@ -40,42 +40,42 @@ class ContrastiveLoss(nn.Module):
         labels: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            text_embeddings: Text embeddings (batch_size x dim)
-            graph_embeddings: Graph embeddings (batch_size x dim)
-            labels: Optional labels for supervised contrastive loss
+            text_embeddings: 文本嵌入（batch_size x dim）
+            graph_embeddings: 图嵌入（batch_size x dim）
+            labels: 可选标签用于监督对比损失
             
         Returns:
-            Dictionary containing:
-                - loss: Contrastive loss value
-                - accuracy: Prediction accuracy
-                - similarity: Similarity matrix
+            包含:
+                - loss: 对比损失值
+                - accuracy: 预测准确率
+                - similarity: 相似度矩阵
         """
-        # Normalize embeddings
+        # 归一化嵌入
         text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
         graph_embeddings = F.normalize(graph_embeddings, p=2, dim=1)
         
-        # Compute similarity matrix
+        # 计算相似度矩阵
         similarity = torch.matmul(text_embeddings, graph_embeddings.t()) / self.temperature
         
-        # Get batch size
+        # 获取批量大小
         batch_size = text_embeddings.size(0)
         
-        # Default labels are identity matrix (diagonal is positive pairs)
+        # 默认标签是单位矩阵（对角线是正样本）
         if labels is None:
             labels = torch.eye(batch_size, device=text_embeddings.device)
             
-        # Compute log softmax
+        # 计算log softmax
         log_probs = F.log_softmax(similarity, dim=1)
         
-        # Compute loss
+        # 计算损失
         loss = -torch.sum(labels * log_probs)
         if self.reduction == "mean":
             loss = loss / batch_size
             
-        # Compute accuracy
+        # 计算准确率
         predictions = similarity.argmax(dim=1)
         targets = labels.argmax(dim=1)
         accuracy = (predictions == targets).float().mean()
@@ -87,7 +87,7 @@ class ContrastiveLoss(nn.Module):
         }
         
 class InfoNCELoss(nn.Module):
-    """InfoNCE loss for contrastive learning"""
+    """InfoNCE损失用于对比学习"""
     
     def __init__(
         self,
@@ -95,11 +95,11 @@ class InfoNCELoss(nn.Module):
         reduction: str = "mean"
     ):
         """
-        Initialize InfoNCE loss
+        初始化InfoNCE损失
         
         Args:
-            temperature: Temperature parameter
-            reduction: Reduction method (mean or sum)
+            temperature: 温度参数
+            reduction: 减少方法（mean或sum）
         """
         super().__init__()
         self.temperature = temperature
@@ -112,48 +112,48 @@ class InfoNCELoss(nn.Module):
         negative_keys: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            query: Query embeddings (batch_size x dim)
-            positive_key: Positive key embeddings (batch_size x dim)
-            negative_keys: Negative key embeddings (num_negative x dim)
+            query: 查询嵌入（batch_size x dim）
+            positive_key: 正样本键嵌入（batch_size x dim）
+            negative_keys: 负样本键嵌入（num_negative x dim）
             
         Returns:
-            Dictionary containing:
-                - loss: InfoNCE loss value
-                - accuracy: Prediction accuracy
-                - similarity: Similarity scores
+            包含:
+                - loss: InfoNCE损失值
+                - accuracy: 预测准确率
+                - similarity: 相似度得分
         """
-        # Normalize embeddings
+        # 归一化嵌入
         query = F.normalize(query, p=2, dim=1)
         positive_key = F.normalize(positive_key, p=2, dim=1)
         negative_keys = F.normalize(negative_keys, p=2, dim=1)
         
-        # Compute positive similarity
+        # 计算正相似度
         positive_similarity = torch.sum(
             query * positive_key,
             dim=1,
             keepdim=True
         ) / self.temperature
         
-        # Compute negative similarity
+        # 计算负相似度
         negative_similarity = torch.matmul(
             query,
             negative_keys.t()
         ) / self.temperature
         
-        # Concatenate similarities
+        # 连接相似度
         logits = torch.cat([positive_similarity, negative_similarity], dim=1)
         
-        # Create labels (positive pair is at index 0)
+        # 创建标签（正样本对在索引0）
         labels = torch.zeros(
             logits.size(0),
             dtype=torch.long,
             device=query.device
         )
         
-        # Compute cross entropy loss
+        # 计算交叉熵损失
         loss = F.cross_entropy(logits, labels, reduction=self.reduction)
         
         # Compute accuracy
@@ -167,7 +167,7 @@ class InfoNCELoss(nn.Module):
         }
         
 class TripletLoss(nn.Module):
-    """Triplet loss with hard negative mining"""
+    """Triplet损失用于硬负挖掘"""
     
     def __init__(
         self,
@@ -175,11 +175,11 @@ class TripletLoss(nn.Module):
         reduction: str = "mean"
     ):
         """
-        Initialize triplet loss
+        初始化三元组损失
         
         Args:
-            margin: Margin parameter
-            reduction: Reduction method (mean or sum)
+            margin: 边距参数
+            reduction: 减少方法（mean或sum）
         """
         super().__init__()
         self.margin = margin
@@ -192,29 +192,29 @@ class TripletLoss(nn.Module):
         negative: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            anchor: Anchor embeddings (batch_size x dim)
-            positive: Positive embeddings (batch_size x dim)
-            negative: Negative embeddings (batch_size x dim)
+            anchor: 锚点嵌入（batch_size x dim）
+            positive: 正样本嵌入（batch_size x dim）
+            negative: 负样本嵌入（batch_size x dim）
             
         Returns:
-            Dictionary containing:
-                - loss: Triplet loss value
-                - positive_distance: Distance to positive samples
-                - negative_distance: Distance to negative samples
+            包含:
+                - loss: 三元组损失值
+                - positive_distance: 正样本距离
+                - negative_distance: 负样本距离
         """
-        # Normalize embeddings
+        # 归一化嵌入
         anchor = F.normalize(anchor, p=2, dim=1)
         positive = F.normalize(positive, p=2, dim=1)
         negative = F.normalize(negative, p=2, dim=1)
         
-        # Compute distances
+        # 计算距离
         positive_distance = torch.sum((anchor - positive) ** 2, dim=1)
         negative_distance = torch.sum((anchor - negative) ** 2, dim=1)
         
-        # Compute loss
+        # 计算损失
         loss = F.relu(positive_distance - negative_distance + self.margin)
         
         if self.reduction == "mean":
@@ -229,7 +229,7 @@ class TripletLoss(nn.Module):
         }
 
 class BatchContrastiveLoss(nn.Module):
-    """Batch-based contrastive loss for dual encoder training"""
+    """基于批次的对比损失用于双编码器训练"""
     
     def __init__(
         self,
@@ -238,12 +238,12 @@ class BatchContrastiveLoss(nn.Module):
         hard_negative_ratio: float = 0.5
     ):
         """
-        Initialize batch contrastive loss
+        初始化批量对比损失
         
         Args:
-            temperature: Temperature parameter
-            use_hard_negatives: Whether to use hard negative mining
-            hard_negative_ratio: Ratio of hard negatives to use
+            temperature: 温度参数
+            use_hard_negatives: 是否使用硬负挖掘
+            hard_negative_ratio: 硬负挖掘比例
         """
         super().__init__()
         self.temperature = temperature
@@ -257,61 +257,61 @@ class BatchContrastiveLoss(nn.Module):
         hard_negatives: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            text_embeddings: Text embeddings (batch_size x dim)
-            graph_embeddings: Graph embeddings (batch_size x dim)
-            hard_negatives: Optional tuple of (text_hard_negatives, graph_hard_negatives)
+            text_embeddings: 文本嵌入（batch_size x dim）
+            graph_embeddings: 图嵌入（batch_size x dim）
+            hard_negatives: 可选元组（text_hard_negatives, graph_hard_negatives）
             
         Returns:
-            Dictionary containing:
-                - loss: Contrastive loss value
-                - text_to_graph_accuracy: Text to graph retrieval accuracy
-                - graph_to_text_accuracy: Graph to text retrieval accuracy
-                - similarity: Similarity matrix
+            包含:
+                - loss: 对比损失值
+                - text_to_graph_accuracy: 文本到图检索准确率
+                - graph_to_text_accuracy: 图到文本检索准确率
+                - similarity: 相似度矩阵
         """
-        # Normalize embeddings
+        # 归一化嵌入
         text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
         graph_embeddings = F.normalize(graph_embeddings, p=2, dim=1)
         
         batch_size = text_embeddings.size(0)
         
-        # Compute similarity matrix for in-batch samples
+        # 计算相似度矩阵
         similarity = torch.matmul(text_embeddings, graph_embeddings.t()) / self.temperature
         
-        # Create labels (diagonal is positive pairs)
+        # 创建标签（对角线是正样本对）
         labels = torch.arange(batch_size, device=text_embeddings.device)
         
-        # Incorporate hard negatives if provided
+        # 如果提供了硬负样本，则纳入硬负样本
         if self.use_hard_negatives and hard_negatives is not None:
             text_hard_negatives, graph_hard_negatives = hard_negatives
             
-            # Normalize hard negatives
+            # 归一化硬负样本
             text_hard_negatives = F.normalize(text_hard_negatives, p=2, dim=1)
             graph_hard_negatives = F.normalize(graph_hard_negatives, p=2, dim=1)
             
-            # Compute similarity with hard negatives
+            # 计算相似度
             text_to_hard_graph = torch.matmul(text_embeddings, graph_hard_negatives.t()) / self.temperature
             hard_text_to_graph = torch.matmul(text_hard_negatives, graph_embeddings.t()) / self.temperature
             
-            # Combine with in-batch similarities
+            # 与批次相似度结合
             text_to_graph_sim = torch.cat([similarity, text_to_hard_graph], dim=1)
             graph_to_text_sim = torch.cat([similarity.t(), hard_text_to_graph.t()], dim=1)
         else:
             text_to_graph_sim = similarity
             graph_to_text_sim = similarity.t()
         
-        # Compute text-to-graph loss
+        # 计算文本到图的损失
         text_to_graph_loss = F.cross_entropy(text_to_graph_sim, labels)
         
-        # Compute graph-to-text loss
+        # 计算图到文本的损失
         graph_to_text_loss = F.cross_entropy(graph_to_text_sim, labels)
         
-        # Combine losses
+        # 结合损失
         loss = (text_to_graph_loss + graph_to_text_loss) / 2
         
-        # Compute accuracies
+        # 计算准确率
         text_to_graph_accuracy = (text_to_graph_sim.argmax(dim=1) == labels).float().mean()
         graph_to_text_accuracy = (graph_to_text_sim.argmax(dim=1) == labels).float().mean()
         
@@ -323,7 +323,7 @@ class BatchContrastiveLoss(nn.Module):
         }
 
 class MultiPositiveLoss(nn.Module):
-    """Contrastive loss with multiple positive samples per anchor"""
+    """基于锚点的对比损失，每个锚点有多个正样本"""
     
     def __init__(
         self,
@@ -331,11 +331,11 @@ class MultiPositiveLoss(nn.Module):
         reduction: str = "mean"
     ):
         """
-        Initialize multi-positive contrastive loss
+        初始化多正样本对比损失
         
         Args:
-            temperature: Temperature parameter
-            reduction: Reduction method (mean or sum)
+            temperature: 温度参数
+            reduction: 减少方法（mean或sum）
         """
         super().__init__()
         self.temperature = temperature
@@ -348,40 +348,40 @@ class MultiPositiveLoss(nn.Module):
         positive_mask: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            anchors: Anchor embeddings (batch_size x dim)
-            positives: Positive embeddings (num_positives x dim)
-            positive_mask: Binary mask indicating positive pairs (batch_size x num_positives)
+            anchors: 锚点嵌入（batch_size x dim）
+            positives: 正样本嵌入（num_positives x dim）
+            positive_mask: 二进制掩码指示正样本对（batch_size x num_positives）
             
         Returns:
-            Dictionary containing:
-                - loss: Multi-positive contrastive loss value
-                - accuracy: Prediction accuracy
-                - similarity: Similarity matrix
+            包含:
+                - loss: 多正样本对比损失值
+                - accuracy: 预测准确率
+                - similarity: 相似度矩阵
         """
-        # Normalize embeddings
+        # 归一化嵌入
         anchors = F.normalize(anchors, p=2, dim=1)
         positives = F.normalize(positives, p=2, dim=1)
         
-        # Compute similarity matrix
+        # 计算相似度矩阵
         similarity = torch.matmul(anchors, positives.t()) / self.temperature
         
-        # Apply log softmax
+        # 应用log softmax
         log_probs = F.log_softmax(similarity, dim=1)
         
-        # Compute loss using positive mask
+        # 使用正样本掩码计算损失
         loss = -(positive_mask * log_probs).sum(dim=1)
         
         if self.reduction == "mean":
-            # Normalize by number of positive pairs per anchor
+            # 按锚点正样本对数归一化
             num_positives = positive_mask.sum(dim=1)
             loss = (loss / torch.clamp(num_positives, min=1)).mean()
         elif self.reduction == "sum":
             loss = loss.sum()
             
-        # Compute accuracy
+        # 计算准确率
         max_sim_indices = similarity.argmax(dim=1)
         has_positive = (positive_mask.sum(dim=1) > 0)
         correct = torch.zeros_like(max_sim_indices, dtype=torch.bool)
@@ -399,7 +399,7 @@ class MultiPositiveLoss(nn.Module):
         }
 
 class CombinedLoss(nn.Module):
-    """Combined loss function for dual encoder training"""
+    """用于双编码器训练的组合损失函数"""
     
     def __init__(
         self,
@@ -410,14 +410,14 @@ class CombinedLoss(nn.Module):
         use_hard_negatives: bool = False
     ):
         """
-        Initialize combined loss
+        初始化组合损失
         
         Args:
-            contrastive_weight: Weight for contrastive loss
-            triplet_weight: Weight for triplet loss
-            temperature: Temperature parameter for contrastive loss
-            margin: Margin parameter for triplet loss
-            use_hard_negatives: Whether to use hard negative mining
+            contrastive_weight: 对比损失权重
+            triplet_weight: 三元组损失权重
+            temperature: 对比损失温度参数
+            margin: 三元组损失边距参数
+            use_hard_negatives: 是否使用硬负挖掘
         """
         super().__init__()
         self.contrastive_weight = contrastive_weight
@@ -436,22 +436,22 @@ class CombinedLoss(nn.Module):
         hard_negatives: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            text_embeddings: Text embeddings (batch_size x dim)
-            graph_embeddings: Graph embeddings (batch_size x dim)
-            triplet_data: Optional tuple of (anchors, positives, negatives) for triplet loss
-            hard_negatives: Optional tuple of (text_hard_negatives, graph_hard_negatives)
+            text_embeddings: 文本嵌入（batch_size x dim）
+            graph_embeddings: 图嵌入（batch_size x dim）
+            triplet_data: 可选元组（anchors, positives, negatives）用于三元组损失
+            hard_negatives: 可选元组（text_hard_negatives, graph_hard_negatives）
             
         Returns:
-            Dictionary containing:
-                - loss: Combined loss value
-                - contrastive_loss: Contrastive loss component
-                - triplet_loss: Triplet loss component (if used)
-                - accuracy: Overall accuracy
+            包含:
+                - loss: 组合损失值
+                - contrastive_loss: 对比损失组件
+                - triplet_loss: 三元组损失组件（如果使用）
+                - accuracy: 总体准确率
         """
-        # Compute contrastive loss
+        # 计算对比损失
         contrastive_results = self.batch_contrastive(
             text_embeddings, 
             graph_embeddings,
@@ -459,7 +459,7 @@ class CombinedLoss(nn.Module):
         )
         contrastive_loss = contrastive_results['loss']
         
-        # Initialize result dictionary
+        # 初始化结果字典
         result_dict = {
             'contrastive_loss': contrastive_loss,
             'text_to_graph_accuracy': contrastive_results['text_to_graph_accuracy'],
@@ -468,33 +468,33 @@ class CombinedLoss(nn.Module):
                         contrastive_results['graph_to_text_accuracy']) / 2
         }
         
-        # Compute triplet loss if weight > 0 and data is provided
+        # 如果权重大于0且数据提供，则计算三元组损失
         if self.triplet_weight > 0 and triplet_data is not None:
             anchors, positives, negatives = triplet_data
             triplet_results = self.triplet(anchors, positives, negatives)
             triplet_loss = triplet_results['loss']
             
-            # Add triplet loss to result dictionary
+            # 将三元组损失添加到结果字典
             result_dict['triplet_loss'] = triplet_loss
             
-            # Add triplet metrics to result dictionary
+            # 将三元组指标添加到结果字典
             for k, v in triplet_results.items():
                 if k != 'loss':
                     result_dict[f'triplet_{k}'] = v
                     
-            # Combine losses
+            # 组合损失
             combined_loss = self.contrastive_weight * contrastive_loss + self.triplet_weight * triplet_loss
         else:
-            # Only use contrastive loss
+            # 仅使用对比损失
             combined_loss = contrastive_loss
         
-        # Add combined loss to result dictionary
+        # 将组合损失添加到结果字典
         result_dict['loss'] = combined_loss
         
         return result_dict
 
 class HardNegativeMiningLoss(nn.Module):
-    """Contrastive loss with online hard negative mining"""
+    """基于在线硬负挖掘的对比损失"""
     
     def __init__(
         self,
@@ -504,13 +504,13 @@ class HardNegativeMiningLoss(nn.Module):
         negative_ratio: float = 0.5
     ):
         """
-        Initialize hard negative mining loss
+        初始化硬负挖掘损失
         
         Args:
-            temperature: Temperature parameter
-            margin: Margin parameter for semi-hard negatives
-            mining_strategy: Mining strategy ('hard', 'semi-hard', or 'distance')
-            negative_ratio: Ratio of negatives to mine
+            temperature: 温度参数
+            margin: 半硬负挖掘边距参数
+            mining_strategy: 挖掘策略（'hard', 'semi-hard', or 'distance'）
+            negative_ratio: 负挖掘比例
         """
         super().__init__()
         self.temperature = temperature
@@ -525,35 +525,35 @@ class HardNegativeMiningLoss(nn.Module):
         positive_mask: torch.Tensor
     ) -> torch.Tensor:
         """
-        Mine hard negatives
+        挖掘硬负样本
         
         Args:
-            anchors: Anchor embeddings (batch_size x dim)
-            candidates: Candidate embeddings (num_candidates x dim)
-            positive_mask: Binary mask indicating positive pairs (batch_size x num_candidates)
+            anchors: 锚点嵌入（batch_size x dim）
+            candidates: 候选嵌入（num_candidates x dim）
+            positive_mask: 二进制掩码指示正样本对（batch_size x num_candidates）
             
         Returns:
-            Indices of hard negative samples
+            硬负样本的索引
         """
-        # Compute similarity matrix
+        # 计算相似度矩阵
         similarity = torch.matmul(anchors, candidates.t())
         
-        # Create negative mask (complement of positive mask)
+        # 创建负样本掩码（正样本掩码的补集）
         negative_mask = ~positive_mask.bool()
         
-        # Apply mining strategy
+        # 应用挖掘策略
         if self.mining_strategy == "hard":
-            # Hard negatives: most similar negatives
+            # 硬负样本：最相似的负样本
             similarity_masked = similarity.clone()
             similarity_masked[~negative_mask] = -float('inf')
             hard_indices = similarity_masked.argsort(dim=1, descending=True)
         
         elif self.mining_strategy == "semi-hard":
-            # Semi-hard negatives: negatives that are closer than positives + margin
+            # 半硬负样本：比正样本更相似的负样本
             positive_sim = (similarity * positive_mask).sum(dim=1, keepdim=True) / positive_mask.sum(dim=1, keepdim=True).clamp(min=1)
             semi_hard_mask = (similarity > positive_sim - self.margin) & negative_mask
             
-            # If no semi-hard negatives, fall back to hard negatives
+            # 如果没有半硬负样本，则回退到硬负样本
             if semi_hard_mask.sum() == 0:
                 similarity_masked = similarity.clone()
                 similarity_masked[~negative_mask] = -float('inf')
@@ -564,14 +564,14 @@ class HardNegativeMiningLoss(nn.Module):
                 hard_indices = similarity_masked.argsort(dim=1, descending=True)
         
         elif self.mining_strategy == "distance":
-            # Distance-based: sample based on similarity distribution
+            # 基于相似度分布的样本：根据相似度分布采样
             similarity_masked = similarity.clone()
             similarity_masked[~negative_mask] = -float('inf')
             
-            # Apply softmax to get sampling probabilities
+            # 应用softmax获取采样概率
             prob = F.softmax(similarity_masked / self.temperature, dim=1)
             
-            # Sample indices based on probabilities
+            # 根据概率采样索引
             hard_indices = torch.multinomial(prob, num_samples=min(int(candidates.size(0) * self.negative_ratio), 
                                                                  candidates.size(0)))
         
@@ -584,43 +584,43 @@ class HardNegativeMiningLoss(nn.Module):
         positive_mask: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass
+        前向传播
         
         Args:
-            anchors: Anchor embeddings (batch_size x dim)
-            candidates: Candidate embeddings (num_candidates x dim)
-            positive_mask: Binary mask indicating positive pairs (batch_size x num_candidates)
+            anchors: 锚点嵌入（batch_size x dim）
+            candidates: 候选嵌入（num_candidates x dim）
+            positive_mask: 二进制掩码指示正样本对（batch_size x num_candidates）
             
         Returns:
             Dictionary containing:
-                - loss: Hard negative mining loss value
-                - accuracy: Prediction accuracy
-                - hard_negative_indices: Indices of hard negatives
+                - loss: 硬负挖掘损失值
+                - accuracy: 预测准确率
+                - hard_negative_indices: 硬负样本的索引
         """
-        # Normalize embeddings
+        # 归一化嵌入
         anchors = F.normalize(anchors, p=2, dim=1)
         candidates = F.normalize(candidates, p=2, dim=1)
         
-        # Mine hard negatives
+        # 挖掘硬负样本
         hard_negative_indices = self.mine_hard_negatives(anchors, candidates, positive_mask)
         
-        # Gather hard negatives
+        # 收集硬负样本
         batch_size = anchors.size(0)
         num_hard_negatives = hard_negative_indices.size(1)
         hard_negatives = candidates[hard_negative_indices.view(-1)].view(batch_size, num_hard_negatives, -1)
         
-        # Compute positive similarity
+        # 计算正样本相似度
         positive_sim = (torch.matmul(anchors, candidates.t()) * positive_mask).sum(dim=1) / positive_mask.sum(dim=1).clamp(min=1)
         
-        # Compute negative similarity
+        # 计算负样本相似度
         negative_sim = torch.bmm(anchors.unsqueeze(1), hard_negatives.transpose(1, 2)).squeeze(1)
         
-        # Compute loss
+        # 计算损失
         logits = torch.cat([positive_sim.unsqueeze(1), negative_sim], dim=1) / self.temperature
         labels = torch.zeros(batch_size, dtype=torch.long, device=anchors.device)
         loss = F.cross_entropy(logits, labels)
         
-        # Compute accuracy
+        # 计算准确率
         accuracy = (logits.argmax(dim=1) == labels).float().mean()
         
         return {

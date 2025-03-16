@@ -1,0 +1,12 @@
+# 设置大文件为binary并使用Git LFS跟踪
+*.json filter=lfs diff=lfs merge=lfs -text
+test_results/** filter=lfs diff=lfs merge=lfs -text
+datasets/** filter=lfs diff=lfs merge=lfs -text
+neo4j/data/** filter=lfs diff=lfs merge=lfs -text
+
+# 设置文本文件
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.txt text eol=lf 
