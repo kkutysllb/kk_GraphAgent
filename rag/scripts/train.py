@@ -38,7 +38,7 @@ from rag.models.loss import (
     CombinedLoss,
     HardNegativeMiningLoss
 )
-from rag.data.graph_text_dataset import GraphTextDataset
+from rag.data.dataset import GraphTextDataset
 from rag.training.trainer import Trainer
 from rag.utils.logging import setup_logger
 from rag.utils.metrics import compute_metrics

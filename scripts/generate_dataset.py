@@ -160,7 +160,8 @@ def generate_dataset(
                 negative_sample_ratio=negative_sample_ratio,
                 split="train",
                 split_ratio=split_ratio,
-                seed=seed
+                seed=seed,
+                skip_internal_split=True
             )
             logger.info(f"训练集创建完成，包含 {len(train_dataset.pairs)} 个样本")
             
@@ -180,7 +181,8 @@ def generate_dataset(
                 negative_sample_ratio=negative_sample_ratio * 0.5,  # 验证集负样本比例减半
                 split="val",
                 split_ratio=split_ratio,
-                seed=seed
+                seed=seed,
+                skip_internal_split=True
             )
             logger.info(f"验证集创建完成，包含 {len(val_dataset.pairs)} 个样本")
             
@@ -200,7 +202,8 @@ def generate_dataset(
                 negative_sample_ratio=negative_sample_ratio * 0.5,  # 测试集负样本比例减半
                 split="test",
                 split_ratio=split_ratio,
-                seed=seed
+                seed=seed,
+                skip_internal_split=True
             )
             logger.info(f"测试集创建完成，包含 {len(test_dataset.pairs)} 个样本")
             

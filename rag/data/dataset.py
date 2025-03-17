@@ -51,7 +51,8 @@ class GraphTextDataset(Dataset, LoggerMixin):
         negative_sample_ratio: float = 0.5,
         split: str = "train",
         split_ratio: Dict[str, float] = {"train": 0.8, "val": 0.1, "test": 0.1},
-        seed: int = 42
+        seed: int = 42,
+        skip_internal_split=False
     ):
         """
         初始化数据集
@@ -72,6 +73,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
             split: 数据集分割（"train", "val", or "test"）
             split_ratio: 数据集分割比例
             seed: 随机种子
+            skip_internal_split: 是否跳过内部的数据集分割
         """
         global _dataset_log_lock
         
@@ -109,8 +111,9 @@ class GraphTextDataset(Dataset, LoggerMixin):
             self.log_info("Creating graph-text pairs...")
         self.pairs = self._create_pairs()
         
-        # 应用数据集分割
-        self.pairs = self._apply_dataset_split()
+        # 应用数据集分割（如果需要）
+        if not skip_internal_split:
+            self.pairs = self._apply_dataset_split()
         
         # 平衡节点类型（如果启用）
         if self.balance_node_types and self.split == "train":
