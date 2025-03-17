@@ -9,7 +9,6 @@
 # --------------------------------------------------------
 """
 
-import torch
 from torch.utils.data import Dataset
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any, Counter
@@ -20,6 +19,7 @@ from tqdm import tqdm
 import math
 from collections import defaultdict
 import threading
+
 
 from ..feature_extractor import FeatureExtractor
 from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
@@ -160,7 +160,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
             # 从Neo4j获取节点ID
             query = f"""
             MATCH (n:{node_type})
-            RETURN id(n) as node_id, n.id as node_name
+            RETURN DISTINCT id(n) as node_id, n.id as node_name
             """
             with self.graph_manager._driver.session() as session:
                 result = session.run(query)
@@ -168,13 +168,8 @@ class GraphTextDataset(Dataset, LoggerMixin):
                     node_id = record["node_id"]
                     node_name = record["node_name"]
                     # 使用特征提取器提取节点特征
-                    features = self.feature_extractor.extract_node_features(node_id, node_type)
-                    nodes[str(node_id)] = {
-                        "id": str(node_id),
-                        "name": node_name,
-                        "type": node_type,
-                        "features": features
-                    }
+                    node_data = self.feature_extractor.extract_node_features(node_id, node_type)
+                    nodes[str(node_id)] = node_data
         
         # 按类型获取边及其特征
         edges = {}
@@ -182,7 +177,8 @@ class GraphTextDataset(Dataset, LoggerMixin):
             # 从Neo4j获取边信息
             query = f"""
             MATCH (source)-[r:{edge_type}]->(target)
-            RETURN id(source) as source_id, id(target) as target_id, id(r) as edge_id
+            WITH DISTINCT source, target, r, id(source) as source_id, id(target) as target_id, id(r) as edge_id
+            RETURN source_id, target_id, edge_id
             """
             with self.graph_manager._driver.session() as session:
                 result = session.run(query)
@@ -191,9 +187,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
                     target_id = record["target_id"]
                     edge_id = record["edge_id"]
                     # 使用特征提取器提取边特征
-                    features = self.feature_extractor.extract_edge_features(
-                        source_id, target_id, edge_type
-                    )
+                    features = self.feature_extractor.extract_edge_features(edge_id)
                     edge_key = f"{source_id}->{target_id}"
                     edges[edge_key] = {
                         "id": str(edge_id),
@@ -215,15 +209,11 @@ class GraphTextDataset(Dataset, LoggerMixin):
         """生成节点文本描述""" 
         descriptions = {}
         for node_id, node in tqdm(self.nodes.items(), desc="生成描述"):
-            # 从特征获取节点属性
-            node_type = node["type"]
-            node_features = node["features"]
-            
             # 获取连接的节点
             connected_nodes = self._get_connected_nodes(node_id)
             
             # 使用节点类型、特征和连接生成描述
-            desc = self._format_description(node_type, node_features, connected_nodes)
+            desc = self._format_description(node["type"], node, connected_nodes)
             descriptions[node_id] = desc
             
         return descriptions
@@ -259,7 +249,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
     def _format_description(
         self,
         node_type: str,
-        features: Dict,
+        node_data: Dict,
         connected_nodes: List[Dict]
     ) -> str:
         """格式化节点描述，基于节点类型、特征和连接关系"""
@@ -270,7 +260,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
             "NE": "这是一个网元 (NE)，ID为{id}。{details}",
             "VM": "这是一个虚拟机 (VM)，ID为{id}。{details}",
             "HOST": "这是一个主机服务器，ID为{id}。{details}",
-            "HA": "这是一个高可用性 (HA) 集群，ID为{id}。{details}",
+            "HA": "这是一个高可用或主机组 (HA) 集群，ID为{id}。{details}",
             "TRU": "这是一个存储单元 (TRU)，ID为{id}。{details}"
         }
         
@@ -280,14 +270,14 @@ class GraphTextDataset(Dataset, LoggerMixin):
         # 格式化基本信息
         basic_info = template.format(
             type=node_type,
-            id=features.get("id", "unknown"),
+            id=node_data.get("id", "unknown"),
             details=""
         )
         
         # 添加属性
         properties = []
-        for key, value in features.items():
-            if key not in ["id", "type", "metrics_data", "log_data", "dynamics_data"] and value:
+        for key, value in node_data.items():
+            if key not in ["id", "type", "metrics_data", "log_data", "dynamics_data", "features"] and value:
                 properties.append(f"{key}: {value}")
         
         property_text = ""
@@ -296,9 +286,9 @@ class GraphTextDataset(Dataset, LoggerMixin):
         
         # 添加指标（如果可用）
         metrics_text = ""
-        if "metrics_data" in features and features["metrics_data"]:
+        if "metrics_data" in node_data and node_data["metrics_data"]:
             try:
-                metrics = json.loads(features["metrics_data"]) if isinstance(features["metrics_data"], str) else features["metrics_data"]
+                metrics = json.loads(node_data["metrics_data"]) if isinstance(node_data["metrics_data"], str) else node_data["metrics_data"]
                 if metrics:
                     metrics_items = []
                     for metric_name, metric_values in metrics.items():
@@ -321,9 +311,9 @@ class GraphTextDataset(Dataset, LoggerMixin):
         
         # 添加日志数据（如果可用）
         log_text = ""
-        if "log_data" in features and features["log_data"]:
+        if "log_data" in node_data and node_data["log_data"]:
             try:
-                logs = json.loads(features["log_data"]) if isinstance(features["log_data"], str) else features["log_data"]
+                logs = json.loads(node_data["log_data"]) if isinstance(node_data["log_data"], str) else node_data["log_data"]
                 if logs and isinstance(logs, dict) and "log_data" in logs:
                     log_entries = []
                     for node_id, log_list in logs["log_data"].items():
@@ -343,9 +333,9 @@ class GraphTextDataset(Dataset, LoggerMixin):
         
         # 添加动态数据（如果可用）
         dynamics_text = ""
-        if "dynamics_data" in features and features["dynamics_data"]:
+        if "dynamics_data" in node_data and node_data["dynamics_data"]:
             try:
-                dynamics = json.loads(features["dynamics_data"]) if isinstance(features["dynamics_data"], str) else features["dynamics_data"]
+                dynamics = json.loads(node_data["dynamics_data"]) if isinstance(node_data["dynamics_data"], str) else node_data["dynamics_data"]
                 if dynamics:
                     dynamics_items = []
                     # 处理不同类型的动态数据
@@ -411,25 +401,25 @@ class GraphTextDataset(Dataset, LoggerMixin):
         
         # 添加节点类型特定的详细信息
         if node_type == "VM":
-            vm_details = self._add_vm_specific_details(features)
+            vm_details = self._add_vm_specific_details(node_data)
             full_description += vm_details
         elif node_type == "HOST":
-            host_details = self._add_host_specific_details(features)
+            host_details = self._add_host_specific_details(node_data)
             full_description += host_details
         elif node_type == "DC":
-            dc_details = self._add_dc_specific_details(features)
+            dc_details = self._add_dc_specific_details(node_data)
             full_description += dc_details
         elif node_type == "TENANT":
-            tenant_details = self._add_tenant_specific_details(features)
+            tenant_details = self._add_tenant_specific_details(node_data)
             full_description += tenant_details
         elif node_type == "NE":
-            ne_details = self._add_ne_specific_details(features)
+            ne_details = self._add_ne_specific_details(node_data)
             full_description += ne_details
         elif node_type == "HA":
-            ha_details = self._add_ha_specific_details(features)
+            ha_details = self._add_ha_specific_details(node_data)
             full_description += ha_details
         elif node_type == "TRU":
-            tru_details = self._add_tru_specific_details(features)
+            tru_details = self._add_tru_specific_details(node_data)
             full_description += tru_details
         
         return full_description.strip()
@@ -1431,7 +1421,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
             'text': pair['text'],
             'subgraph': pair['subgraph'],
             'node_type': pair['node_type']
-        } 
+        }
         
     def __getstate__(self):
         """自定义序列化方法，排除无法序列化的Neo4j连接对象"""
@@ -1449,4 +1439,271 @@ class GraphTextDataset(Dataset, LoggerMixin):
         # 注意：反序列化后，graph_manager和feature_extractor将为None
         # 如果需要使用这些对象，需要在加载后重新初始化它们
         self.graph_manager = None
-        self.feature_extractor = None 
+        self.feature_extractor = None
+
+    @classmethod
+    def from_samples(cls, samples: List[Dict], config: Dict):
+        """
+        从预生成的样本创建数据集
+        
+        Args:
+            samples: 样本列表
+            config: 数据集配置
+            
+        Returns:
+            GraphTextDataset实例
+        """
+        dataset = cls.__new__(cls)
+        dataset.samples = samples
+        dataset.config = config
+        dataset.node_types = config['node_types']
+        dataset.edge_types = config['edge_types']
+        dataset.max_text_length = config.get('max_text_length', 512)
+        dataset.max_node_size = config.get('max_node_size', 100)
+        dataset.max_edge_size = config.get('max_edge_size', 200)
+        
+        return dataset
+        
+    @classmethod
+    def from_dataset(cls, dataset_path: str, config: Dict):
+        """
+        从预生成的dataset文件创建数据集,使用分块加载方式
+        
+        Args:
+            dataset_path: 数据集文件路径
+            config: 数据集配置
+            
+        Returns:
+            GraphTextDataset实例
+        """
+        import json
+        import os
+        import torch
+        
+        dataset_instance = cls.__new__(cls)
+        dataset_instance.config = config
+        dataset_instance.node_types = config['node_types']
+        dataset_instance.edge_types = config['edge_types']
+        dataset_instance.max_text_length = config.get('max_text_length', 512)
+        dataset_instance.max_node_size = config.get('max_node_size', 100)
+        dataset_instance.max_edge_size = config.get('max_edge_size', 200)
+        
+        # 确保使用dataset.json文件
+        if 'samples.json' in dataset_path:
+            dataset_path = dataset_path.replace('samples.json', 'dataset.json')
+        
+        # 获取数据集大小
+        dataset_size = config.get('train_size' if 'train' in os.path.basename(dataset_path) else 
+                                 'val_size' if 'val' in os.path.basename(dataset_path) else 
+                                 'test_size', 0)
+        
+        # 创建一个惰性加载的数据集
+        dataset_instance.dataset_path = dataset_path
+        dataset_instance.dataset_size = dataset_size
+        
+        # 创建一个缓存，用于存储已加载的数据
+        dataset_instance.cache = {}
+        dataset_instance.cache_size = 100  # 最多缓存100个样本
+        
+        # 尝试加载第一个样本以验证格式
+        try:
+            first_sample = dataset_instance._load_sample(0)
+            dataset_instance.sample_keys = list(first_sample.keys())
+        except Exception as e:
+            print(f"警告：无法加载第一个样本：{e}")
+            dataset_instance.sample_keys = []
+        
+        return dataset_instance
+    
+    def _load_sample(self, idx):
+        """从文件中加载单个样本"""
+        import json
+        import torch
+        
+        # 使用随机访问方式加载单个样本
+        # 注意：这需要dataset.json文件是一个JSON数组，每个元素是一个样本
+        with open(self.dataset_path, 'r') as f:
+            # 移动到文件开头
+            f.seek(0)
+            
+            # 跳过开头的 '['
+            f.read(1)
+            
+            # 跳过前idx个样本
+            depth = 0
+            for _ in range(idx):
+                while True:
+                    char = f.read(1)
+                    if not char:
+                        raise EOFError("文件结束")
+                    
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            # 跳过样本之间的逗号
+                            f.read(1)
+                            break
+            
+            # 读取当前样本
+            sample_str = '{'
+            depth = 1
+            while depth > 0:
+                char = f.read(1)
+                if not char:
+                    break
+                
+                sample_str += char
+                
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+            
+            # 解析样本
+            try:
+                return json.loads(sample_str)
+            except json.JSONDecodeError:
+                return {}
+    
+    def __len__(self):
+        return self.dataset_size
+    
+    def __getitem__(self, idx):
+        # 检查缓存
+        if idx in self.cache:
+            return self.cache[idx]
+        
+        # 从文件中加载样本
+        sample = self._load_sample(idx)
+        
+        # 更新缓存
+        if len(self.cache) >= self.cache_size:
+            # 如果缓存已满，删除最早的项
+            oldest_key = next(iter(self.cache))
+            del self.cache[oldest_key]
+        
+        self.cache[idx] = sample
+        return sample
+    
+    @classmethod
+    def collate_fn(cls, batch):
+        """
+        批处理函数，将多个样本组合成一个批次
+        
+        Args:
+            batch: 样本列表
+            
+        Returns:
+            批处理后的数据
+        """
+        import torch
+        from transformers import AutoTokenizer
+        
+        # 过滤掉空样本
+        batch = [b for b in batch if b]
+        
+        if not batch:
+            return {}
+        
+        # 提取文本和图特征
+        texts = [item.get('text', '') for item in batch]
+        node_ids = [item.get('node_id', '') for item in batch]
+        labels = [item.get('label', 1) for item in batch]
+        
+        # 使用tokenizer处理文本
+        tokenizer = AutoTokenizer.from_pretrained('bert-base-chinese')
+        text_encodings = tokenizer(
+            texts,
+            padding='max_length',
+            truncation=True,
+            max_length=512,
+            return_tensors='pt'
+        )
+        
+        # 提取节点特征
+        node_features_list = []
+        for item in batch:
+            # 获取节点特征，如果不存在则使用随机特征
+            if 'node_features' in item and item['node_features'] is not None:
+                # 确保特征是张量
+                if isinstance(item['node_features'], list):
+                    node_features_list.append(torch.tensor(item['node_features'], dtype=torch.float))
+                else:
+                    node_features_list.append(torch.tensor(item['node_features'], dtype=torch.float))
+            else:
+                # 使用随机特征作为后备
+                node_features_list.append(torch.randn(256))
+        
+        # 堆叠节点特征
+        node_features = torch.stack(node_features_list)
+        
+        # 处理边特征和边索引
+        batch_size = len(batch)
+        edge_indices = []
+        edge_features_list = []
+        edge_types = []
+        
+        # 为每个样本创建边索引和特征
+        for i, item in enumerate(batch):
+            subgraph = item.get('subgraph', {})
+            edges = subgraph.get('edges', [])
+            
+            # 为每条边创建索引和特征
+            for edge in edges:
+                # 获取源节点和目标节点索引
+                src_idx = i  # 当前样本索引作为源节点
+                dst_idx = i  # 当前样本索引作为目标节点（简化处理）
+                
+                edge_indices.append([src_idx, dst_idx])
+                
+                # 获取边特征
+                edge_id = edge.get('id')
+                edge_type = edge.get('type', 'default')
+                
+                # 从item中获取边特征，如果存在
+                if 'edge_features' in item and item['edge_features'] is not None and edge_id in item['edge_features']:
+                    edge_feat = item['edge_features'][edge_id]
+                    if isinstance(edge_feat, list):
+                        edge_features_list.append(torch.tensor(edge_feat, dtype=torch.float))
+                    else:
+                        edge_features_list.append(torch.tensor(edge_feat, dtype=torch.float))
+                else:
+                    # 使用随机特征作为后备
+                    edge_features_list.append(torch.randn(64))
+                
+                edge_types.append(edge_type)
+        
+        # 如果没有边，创建一个默认边
+        if not edge_indices:
+            for i in range(batch_size):
+                edge_indices.append([i, i])  # 自环边
+                edge_features_list.append(torch.randn(64))
+                edge_types.append('default')
+        
+        # 转换为张量
+        edge_index = torch.tensor(edge_indices, dtype=torch.long).t()  # [2, num_edges]
+        edge_features = torch.stack(edge_features_list) if edge_features_list else torch.randn(1, 64)
+        
+        # 创建边类型字典
+        edge_indices_dict = {'default': edge_index}
+        edge_features_dict = {'default': edge_features}
+        
+        # 组合成批次
+        batch_data = {
+            'input_ids': text_encodings.input_ids,
+            'attention_mask': text_encodings.attention_mask,
+            'token_type_ids': text_encodings.token_type_ids if hasattr(text_encodings, 'token_type_ids') else None,
+            'node_features': node_features,
+            'edge_features': edge_features,
+            'edge_index': edge_index,
+            'edge_indices_dict': edge_indices_dict,
+            'edge_features_dict': edge_features_dict,
+            'batch': torch.arange(batch_size),
+            'node_ids': node_ids,
+            'texts': texts,
+            'labels': torch.tensor(labels, dtype=torch.long)
+        }
+        
+        return batch_data 

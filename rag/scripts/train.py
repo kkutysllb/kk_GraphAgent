@@ -20,19 +20,13 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from typing import Dict, List, Optional, Tuple, Any, Union
-from tqdm import tqdm
+from typing import Dict, Optional, Any
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from rag.models.dual_encoder import DualEncoder
 from rag.models.loss import (
-    ContrastiveLoss,
-    InfoNCELoss,
-    TripletLoss,
     BatchContrastiveLoss,
     MultiPositiveLoss,
     CombinedLoss,
@@ -40,16 +34,15 @@ from rag.models.loss import (
 )
 from rag.data.dataset import GraphTextDataset
 from rag.training.trainer import Trainer
-from rag.utils.logging import setup_logger
-from rag.utils.metrics import compute_metrics
-from rag.utils.tools import save_checkpoint, load_checkpoint
+from rag.utils.logging import setup_logging
+from rag.utils.tools import load_checkpoint
 
 # 创建训练结果目录
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # 设置日志
-logger = setup_logger("dual_encoder_training")
+logger = None  # 初始化为None，在TrainingManager中设置
 
 class TrainingManager:
     """双通道编码器训练管理器"""
@@ -71,12 +64,21 @@ class TrainingManager:
         
         # 设置设备
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"使用设备: {self.device}")
         
-        # 创建结果目录
-        self.experiment_name = self.config.get('experiment_name', f"dual_encoder_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        self.experiment_dir = os.path.join(RESULTS_DIR, self.experiment_name)
-        os.makedirs(self.experiment_dir, exist_ok=True)
+        # 创建实验目录结构（不使用logger）
+        self._create_experiment_dirs()
+        
+        # 设置日志
+        global logger
+        logger = setup_logging("dual_encoder_training", os.path.join(self.log_dir, 'training.log'))
+        
+        # 现在可以使用logger了
+        logger.info(f"使用设备: {self.device}")
+        logger.info(f"创建实验目录: {self.experiment_dir}")
+        logger.info(f"日志目录: {self.log_dir}")
+        logger.info(f"检查点目录: {self.checkpoint_dir}")
+        logger.info(f"评估结果目录: {self.eval_dir}")
+        logger.info(f"可视化结果目录: {self.vis_dir}")
         
         # 保存配置
         self._save_config()
@@ -91,6 +93,26 @@ class TrainingManager:
         self.train_metrics = []
         self.val_metrics = []
         
+    def _create_experiment_dirs(self) -> None:
+        """创建实验目录结构（不使用logger）"""
+        # 生成实验名称（使用时间戳）
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        exp_name = self.config.get('experiment_name', 'dual_encoder')
+        self.experiment_name = f"{exp_name}_{timestamp}"
+        
+        # 创建主实验目录
+        self.experiment_dir = os.path.join(RESULTS_DIR, self.experiment_name)
+        
+        # 创建子目录
+        self.log_dir = os.path.join(self.experiment_dir, 'logs')  # 日志目录
+        self.checkpoint_dir = os.path.join(self.experiment_dir, 'checkpoints')  # 检查点目录
+        self.eval_dir = os.path.join(self.experiment_dir, 'evaluation')  # 评估结果目录
+        self.vis_dir = os.path.join(self.experiment_dir, 'visualization')  # 可视化结果目录
+        
+        # 创建所有目录
+        for dir_path in [self.log_dir, self.checkpoint_dir, self.eval_dir, self.vis_dir]:
+            os.makedirs(dir_path, exist_ok=True)
+            
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """
         加载配置文件
@@ -130,34 +152,39 @@ class TrainingManager:
         # 创建训练器
         self._setup_trainer()
         
+        # 设置日志
+        self._setup_logging()
+        
         logger.info("训练环境设置完成")
     
     def _setup_data(self) -> None:
         """设置数据集和数据加载器"""
         data_config = self.config.get('data', {})
+        dataset_path = data_config.get('dataset_path', 'datasets/full_dataset')
+        
+        logger.info(f"从 {dataset_path} 加载数据集...")
+        
+        # 加载数据集配置
+        with open(os.path.join(dataset_path, 'dataset_config.json'), 'r') as f:
+            dataset_config = json.load(f)
+            
+        logger.info(f"数据集配置: {dataset_config}")
         
         # 创建数据集
-        train_dataset = GraphTextDataset(
-            neo4j_uri=data_config.get('neo4j_uri', 'bolt://localhost:7687'),
-            neo4j_user=data_config.get('neo4j_user', 'neo4j'),
-            neo4j_password=data_config.get('neo4j_password', 'password'),
-            split='train',
-            max_graph_size=data_config.get('max_graph_size', 100),
-            max_text_length=data_config.get('max_text_length', 128),
-            augmentation=data_config.get('augmentation', True),
-            negative_sampling=data_config.get('negative_sampling', 'hard')
+        train_dataset = GraphTextDataset.from_dataset(
+            os.path.join(dataset_path, 'train_dataset.json'),
+            dataset_config
+        )
+        val_dataset = GraphTextDataset.from_dataset(
+            os.path.join(dataset_path, 'val_dataset.json'),
+            dataset_config
         )
         
-        val_dataset = GraphTextDataset(
-            neo4j_uri=data_config.get('neo4j_uri', 'bolt://localhost:7687'),
-            neo4j_user=data_config.get('neo4j_user', 'neo4j'),
-            neo4j_password=data_config.get('neo4j_password', 'password'),
-            split='val',
-            max_graph_size=data_config.get('max_graph_size', 100),
-            max_text_length=data_config.get('max_text_length', 128),
-            augmentation=False,
-            negative_sampling=data_config.get('negative_sampling', 'hard')
-        )
+        # 确保数据集有collate_fn方法
+        if not hasattr(train_dataset, 'collate_fn'):
+            train_dataset.collate_fn = GraphTextDataset.collate_fn
+        if not hasattr(val_dataset, 'collate_fn'):
+            val_dataset.collate_fn = GraphTextDataset.collate_fn
         
         # 创建数据加载器
         self.train_loader = DataLoader(
@@ -187,12 +214,20 @@ class TrainingManager:
         
         # 创建双通道编码器
         self.model = DualEncoder(
-            text_encoder_name=model_config.get('text_encoder_name', 'bert-base-chinese'),
-            text_pooling_strategy=model_config.get('text_pooling_strategy', 'cls'),
-            graph_hidden_dim=model_config.get('graph_hidden_dim', 256),
-            graph_num_layers=model_config.get('graph_num_layers', 3),
-            projection_dim=model_config.get('projection_dim', 768),
-            dropout=model_config.get('dropout', 0.1)
+            text_model_name=model_config.get('text_model_name', 'bert-base-chinese'),
+            node_dim=model_config.get('node_dim', 256),
+            edge_dim=model_config.get('edge_dim', 64),
+            time_series_dim=model_config.get('time_series_dim', 32),
+            hidden_dim=model_config.get('hidden_dim', 256),
+            output_dim=model_config.get('output_dim', 768),
+            num_layers=model_config.get('num_layers', 2),
+            num_heads=model_config.get('num_heads', 8),
+            dropout=model_config.get('dropout', 0.1),
+            freeze_text=model_config.get('freeze_text', False),
+            node_types=model_config.get('node_types', ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"]),
+            edge_types=model_config.get('edge_types', ["DC_TO_TENANT", "TENANT_TO_NE", "NE_TO_VM", "VM_TO_HOST", "HOST_TO_HA", "HA_TO_TRU"]),
+            seq_len=model_config.get('seq_len', 24),
+            num_hierarchies=model_config.get('num_hierarchies', 7)
         )
         
         # 打印模型信息
@@ -207,7 +242,7 @@ class TrainingManager:
         # 获取损失函数类型
         loss_type = loss_config.get('type', 'combined')
         
-        # 创建训练器
+        # 创建训练器，使用checkpoint_dir保存检查点
         self.trainer = Trainer(
             model=self.model,
             train_loader=self.train_loader,
@@ -219,7 +254,7 @@ class TrainingManager:
             max_grad_norm=training_config.get('max_grad_norm', 1.0),
             num_epochs=training_config.get('num_epochs', 10),
             device=self.device,
-            checkpoint_dir=self.experiment_dir,
+            checkpoint_dir=self.checkpoint_dir,
             early_stopping_patience=training_config.get('early_stopping', {}).get('patience', 3)
         )
         
@@ -296,12 +331,18 @@ class TrainingManager:
         
         plt.tight_layout()
         
-        # 保存图表
-        chart_path = os.path.join(self.experiment_dir, 'training_progress.png')
+        # 保存图表到可视化目录
+        chart_path = os.path.join(self.vis_dir, 'training_progress.png')
         plt.savefig(chart_path)
         plt.close()
         
         logger.info(f"训练进度图表已保存到: {chart_path}")
+        
+        # 保存训练历史数据
+        history_path = os.path.join(self.vis_dir, 'training_history.json')
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=4)
+        logger.info(f"训练历史数据已保存到: {history_path}")
     
     def load_checkpoint(self, checkpoint_path: str) -> None:
         """
@@ -320,6 +361,28 @@ class TrainingManager:
         self.trainer.patience_counter = checkpoint.get('patience_counter', 0)
         
         logger.info(f"从检查点加载模型: {checkpoint_path}")
+
+    def _setup_logging(self) -> None:
+        """设置日志"""
+        # 创建日志目录
+        log_dir = os.path.join(self.experiment_dir, 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 设置日志文件
+        log_file = os.path.join(log_dir, 'training.log')
+        
+        # 配置日志处理器
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # 创建格式化器
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        
+        # 添加处理器到日志记录器
+        logger.addHandler(file_handler)
+        
+        logger.info(f"日志文件保存在: {log_file}")
 
 def main():
     """主函数"""

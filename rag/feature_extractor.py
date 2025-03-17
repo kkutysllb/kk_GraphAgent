@@ -73,180 +73,234 @@ class FeatureExtractor:
             'resource': ['VM', 'HOST', 'HA', 'TRU']
         }
         
-    def extract_node_features(
-        self,
-        node_id: str,
-        node_type: str
-    ) -> Dict:
-        """
-        根据节点类型提取节点特征
+    def extract_node_features(self, node_id: int, node_type: str = None) -> Dict:
+        """提取节点特征
         
         Args:
             node_id: 节点ID
-            node_type: 节点类型
+            node_type: 节点类型（可选）
             
         Returns:
-            节点特征字典
+            包含节点特征的字典
         """
         try:
-            # 获取节点属性
+            # 查询节点属性
             query = f"""
-            MATCH (n:{node_type})
-            WHERE id(n) = $node_id
+            MATCH (n) WHERE id(n) = $node_id
             RETURN n
+            """
+            with self.graph_manager._driver.session() as session:
+                result = session.run(query, node_id=node_id)
+                record = result.single()
+                if not record:
+                    # 如果找不到节点，返回默认特征
+                    return {
+                        "id": str(node_id),
+                        "type": node_type or "unknown",
+                        "name": "unknown",
+                        "business_type": "",
+                        "layer": "",
+                        "layer_type": "",
+                        "metrics_data": "",
+                        "log_data": "",
+                        "features": np.zeros(256, dtype=np.float32)
+                    }
+                
+                node = record["n"]
+                node_props = dict(node.items())
+                
+                # 构建特征字典
+                features = {
+                    "id": str(node_id),
+                    "type": node_type or node_props.get("type", "unknown"),
+                    "name": node_props.get("name", ""),
+                    "business_type": node_props.get("business_type", ""),
+                    "layer": node_props.get("layer", ""),
+                    "layer_type": node_props.get("layer_type", ""),
+                    "metrics_data": node_props.get("metrics_data", ""),
+                    "log_data": node_props.get("log_data", ""),
+                    "features": np.zeros(256, dtype=np.float32)  # 预留特征向量
+                }
+                
+                return features
+                
+        except Exception as e:
+            self.log_error(f"提取节点 {node_id} 特征时出错: {str(e)}")
+            # 返回默认特征
+            return {
+                "id": str(node_id),
+                "type": node_type or "unknown",
+                "name": "unknown",
+                "business_type": "",
+                "layer": "",
+                "layer_type": "",
+                "metrics_data": "",
+                "log_data": "",
+                "features": np.zeros(256, dtype=np.float32)
+            }
+    
+    def extract_edge_features(
+        self,
+        edge_id: str
+    ) -> np.ndarray:
+        """
+        根据边ID提取边特征，返回固定维度的特征向量
+        
+        Args:
+            edge_id: 边ID
+            
+        Returns:
+            边特征向量（64维）
+        """
+        try:
+            # 获取边属性
+            query = f"""
+            MATCH ()-[r]-()
+            WHERE id(r) = $edge_id
+            RETURN r, type(r) as type
             """
             
             with self.graph_manager._driver.session() as session:
-                result = session.run(query, {"node_id": node_id})
+                result = session.run(query, {"edge_id": edge_id})
                 record = result.single()
                 
                 if not record:
-                    logger.warning(f"Node {node_id} of type {node_type} not found")
-                    return self._get_default_node_features(node_type)
-                    
-                node = dict(record["n"].items())
-                features = {}
+                    logger.warning(f"Edge {edge_id} not found")
+                    return np.zeros(64)
                 
-                # 提取所有可用的属性
-                for key in node:
-                    # 直接保留原始属性值
-                    features[key] = node[key]
+                edge = dict(record["r"].items())
+                edge_type = record["type"]
                 
-                # 确保基本特征键存在
-                for key in self.node_feature_keys.get(node_type, []):
-                    if key not in features:
-                        features[key] = ""
+                # 提取基本特征
+                basic_features = []
                 
-                # 处理metrics_data以获取派生特征
-                if 'metrics_data' in features and isinstance(features['metrics_data'], str) and features['metrics_data']:
+                # 添加边类型的one-hot编码
+                type_one_hot = np.zeros(len(self.relationship_types))
+                if edge_type in self.relationship_types:
+                    type_one_hot[self.relationship_types.index(edge_type)] = 1
+                basic_features.extend(type_one_hot)
+                
+                # 处理dynamics_data
+                dynamics_features = np.zeros(32)  # 为动态数据预留32维
+                if 'dynamics_data' in edge and edge['dynamics_data']:
                     try:
-                        metrics = json.loads(features['metrics_data'])
-                        if metrics:
-                            latest_metrics = self._get_latest_metrics(metrics)
-                            features.update(latest_metrics)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse metrics_data for node {node_id}")
+                        dynamics = json.loads(edge['dynamics_data']) if isinstance(edge['dynamics_data'], str) else edge['dynamics_data']
+                        if dynamics:
+                            dynamics_features = self._process_dynamics_data(dynamics)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                basic_features.extend(dynamics_features)
                 
-                # 处理log_data以获取派生特征
-                if 'log_data' in features and isinstance(features['log_data'], str) and features['log_data']:
-                    try:
-                        logs = json.loads(features['log_data'])
-                        if logs:
-                            latest_logs = self._get_latest_logs(logs)
-                            features.update(latest_logs)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse log_data for node {node_id}")
-                        
-                return features
-                
-        except Exception as e:
-            logger.error(f"Error extracting features for node {node_id}: {str(e)}")
-            return self._get_default_node_features(node_type)
-
-    def extract_edge_features(
-        self,
-        source_id: str,
-        target_id: str,
-        edge_type: str
-    ) -> Dict:
-        """
-        根据边类型提取边特征
-        
-        Args:
-            source_id: 源节点ID
-            target_id: 目标节点ID
-            edge_type: 边类型
-            
-        Returns:
-            边特征字典
-        """
-        try:
-            # 获取默认特征作为基础
-            features = self._get_default_edge_features(edge_type)
-            
-            # 确保ID是整数类型
-            try:
-                source_id_int = int(source_id)
-                target_id_int = int(target_id)
-            except (ValueError, TypeError):
-                logger.warning(f"无法将ID转换为整数: source_id={source_id}, target_id={target_id}")
-                return features
-            
-            # 首先获取源节点和目标节点的类型
-            type_query = """
-            MATCH (source) WHERE id(source) = $source_id
-            MATCH (target) WHERE id(target) = $target_id
-            RETURN labels(source) as source_labels, labels(target) as target_labels
-            """
-            
-            with self.graph_manager._driver.session() as session:
-                type_result = session.run(type_query, {"source_id": source_id_int, "target_id": target_id_int})
-                type_record = type_result.single()
-                
-                if not type_record:
-                    logger.warning(f"无法获取节点类型: source_id={source_id_int}, target_id={target_id_int}")
-                    return features
-                
-                source_labels = type_record['source_labels']
-                target_labels = type_record['target_labels']
-                
-                # 获取第一个标签作为节点类型
-                source_type = source_labels[0] if source_labels else ""
-                target_type = target_labels[0] if target_labels else ""
-                
-                # 设置源节点和目标节点类型
-                features["source_type"] = source_type
-                features["target_type"] = target_type
-        
-            
-            # 获取边属性
-            edge_query = f"""
-            MATCH (source)-[r:{edge_type}]->(target)
-            WHERE id(source) = $source_id AND id(target) = $target_id
-            RETURN r
-            """
-            
-            with self.graph_manager._driver.session() as session:
-                edge_result = session.run(edge_query, {"source_id": source_id_int, "target_id": target_id_int})
-                edge_record = edge_result.single()
-                
-                if not edge_record:
-                    logger.warning(f"Edge {source_id}->{target_id} of type {edge_type} not found")
-                    return features
-                
-                # 提取边的所有属性
-                edge = dict(edge_record["r"].items())
-                
-                # 添加所有边属性到特征中
-                for key, value in edge.items():
-                    if key == 'weight':
-                        features[key] = float(value)
-                    else:
-                        features[key] = value
-                
-                # 处理dynamics_data以获取派生特征
-                if 'dynamics_data' in features and features['dynamics_data']:
-                    try:
-                        # 确保dynamics_data是字符串类型
-                        dynamics_data_str = features['dynamics_data']
-                        if not isinstance(dynamics_data_str, str):
-                            dynamics_data_str = str(dynamics_data_str)
-                            
-                        dynamics = json.loads(dynamics_data_str)
-                        if dynamics and 'propagation_data' in dynamics:
-                            latest_dynamics = self._get_latest_dynamics(dynamics['propagation_data'])
-                            features.update(latest_dynamics)
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse dynamics_data for edge {source_id}->{target_id}: {str(e)}")
-                    except Exception as e:
-                        logger.warning(f"Error processing dynamics_data for edge {source_id}->{target_id}: {str(e)}")
+                # 确保特征向量长度为64
+                features = np.array(basic_features, dtype=np.float32)
+                if len(features) < 64:
+                    features = np.pad(features, (0, 64 - len(features)))
+                elif len(features) > 64:
+                    features = features[:64]
                 
                 return features
                 
         except Exception as e:
-            logger.error(f"Error extracting features for edge {source_id}->{target_id}: {str(e)}")
-            return self._get_default_edge_features(edge_type)
+            logger.error(f"Error extracting features for edge {edge_id}: {str(e)}")
+            return np.zeros(64)
+    
+    def _process_metrics_data(self, metrics: Dict, node_type: str) -> np.ndarray:
+        """处理指标数据，返回固定维度的特征向量"""
+        features = []
+        
+        if node_type == 'VM':
+            # VM特定的指标
+            cpu_usage = self._get_latest_metric_value(metrics, 'cpu_usage', 0)
+            memory_usage = self._get_latest_metric_value(metrics, 'memory_usage', 0)
+            disk_usage = self._get_latest_metric_value(metrics, 'disk_usage', 0)
+            network_traffic = self._get_latest_metric_value(metrics, 'network_traffic', 0)
             
+            features.extend([cpu_usage, memory_usage, disk_usage, network_traffic])
+            
+        elif node_type == 'HOST':
+            # HOST特定的指标
+            cpu_load = self._get_latest_metric_value(metrics, 'cpu_load', 0)
+            memory_used = self._get_latest_metric_value(metrics, 'memory_used', 0)
+            disk_io = self._get_latest_metric_value(metrics, 'disk_io', 0)
+            network_throughput = self._get_latest_metric_value(metrics, 'network_throughput', 0)
+            
+            features.extend([cpu_load, memory_used, disk_io, network_throughput])
+            
+        # 确保返回128维特征
+        features = np.array(features, dtype=np.float32)
+        if len(features) < 128:
+            features = np.pad(features, (0, 128 - len(features)))
+        return features[:128]
+    
+    def _process_log_data(self, logs: Dict) -> np.ndarray:
+        """处理日志数据，返回固定维度的特征向量"""
+        features = []
+        
+        if isinstance(logs, dict) and 'log_data' in logs:
+            # 统计不同状态的出现次数
+            status_counts = {'normal': 0, 'warning': 0, 'error': 0}
+            
+            for node_id, log_list in logs['log_data'].items():
+                if isinstance(log_list, list):
+                    # 只处理最近的30条日志
+                    recent_logs = log_list[-30:] if len(log_list) > 30 else log_list
+                    for entry in recent_logs:
+                        if 'status' in entry:
+                            for status_key, status_val in entry['status'].items():
+                                # 确保status_val是字符串类型
+                                status_str = str(status_val).lower() if status_val is not None else ""
+                                if status_str in status_counts:
+                                    status_counts[status_str] += 1
+            
+            # 归一化状态计数
+            total = sum(status_counts.values()) or 1
+            features.extend([count/total for count in status_counts.values()])
+        
+        # 确保返回64维特征
+        features = np.array(features, dtype=np.float32)
+        if len(features) < 64:
+            features = np.pad(features, (0, 64 - len(features)))
+        return features[:64]
+    
+    def _process_dynamics_data(self, dynamics: Dict) -> np.ndarray:
+        """处理动态数据，返回固定维度的特征向量"""
+        features = []
+        
+        if isinstance(dynamics, dict):
+            # 处理传播数据
+            if 'propagation_data' in dynamics and isinstance(dynamics['propagation_data'], list):
+                recent_props = dynamics['propagation_data'][-5:] if len(dynamics['propagation_data']) > 5 else dynamics['propagation_data']
+                
+                # 提取传播概率
+                probs = []
+                for prop in recent_props:
+                    if 'effects' in prop:
+                        for effect in prop['effects'].values():
+                            if isinstance(effect, dict) and 'probability' in effect:
+                                probs.append(effect['probability'])
+                
+                # 计算平均传播概率
+                if probs:
+                    features.append(np.mean(probs))
+                else:
+                    features.append(0)
+        
+        # 确保返回32维特征
+        features = np.array(features, dtype=np.float32)
+        if len(features) < 32:
+            features = np.pad(features, (0, 32 - len(features)))
+        return features[:32]
+    
+    def _get_latest_metric_value(self, metrics: Dict, metric_name: str, default: float = 0) -> float:
+        """获取指标的最新值"""
+        if metric_name in metrics:
+            values = metrics[metric_name]
+            if isinstance(values, list) and values:
+                return float(values[-1])
+            elif isinstance(values, (int, float)):
+                return float(values)
+        return default
+    
     def extract_chain_features(
         self,
         dc_id: str,
@@ -351,11 +405,7 @@ class FeatureExtractor:
                         edge_type = rel.type
                         if edge_type in result['edges']:
                             edge_key = f"{rel.start_node.id}->{rel.end_node.id}"
-                            result['edges'][edge_type][edge_key] = self.extract_edge_features(
-                                rel.start_node.id,
-                                rel.end_node.id,
-                                edge_type
-                            )
+                            result['edges'][edge_type][edge_key] = self.extract_edge_features(rel.id)
         except Exception as e:
             logger.error(f"Error in _extract_specific_chain: {str(e)}")
                         

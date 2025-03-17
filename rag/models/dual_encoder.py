@@ -67,18 +67,16 @@ class DualEncoder(nn.Module):
         
         # 图编码器
         self.graph_encoder = DynamicHeterogeneousGraphEncoder(
-            node_types=node_types,
-            edge_types=edge_types,
             node_dim=node_dim,
             edge_dim=edge_dim,
             time_series_dim=time_series_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,
+            edge_types=edge_types,
+            num_levels=num_hierarchies,
             seq_len=seq_len,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            dropout=dropout,
-            num_hierarchies=num_hierarchies
+            use_edge_features=True,
+            dropout=dropout
         )
         
         # 对齐投影
@@ -132,7 +130,6 @@ class DualEncoder(nn.Module):
         edge_indices_dict: Dict[str, torch.Tensor],
         edge_features_dict: Dict[str, torch.Tensor],
         time_series_features: Optional[torch.Tensor] = None,
-        node_hierarchies: Optional[torch.Tensor] = None,
         batch: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
@@ -143,8 +140,7 @@ class DualEncoder(nn.Module):
             edge_indices_dict: 边索引字典
             edge_features_dict: 边特征字典
             time_series_features: 时间序列特征
-            node_hierarchies: 节点层次信息
-            batch: 批量分配矩阵
+            batch: 批量分配矩阵（不使用）
             
         Returns:
             包含图嵌入的字典
@@ -154,17 +150,28 @@ class DualEncoder(nn.Module):
             node_features=node_features,
             edge_indices_dict=edge_indices_dict,
             edge_features_dict=edge_features_dict,
-            time_series_features=time_series_features,
-            node_hierarchies=node_hierarchies,
-            batch=batch
+            time_series_features=time_series_features
         )
         
-        # 投影嵌入
-        graph_embedding = self.graph_projection(graph_outputs['graph_embedding'])
+        # 检查graph_outputs的格式
+        if isinstance(graph_outputs, torch.Tensor):
+            # 如果graph_outputs是张量，直接使用
+            graph_embedding = self.graph_projection(graph_outputs)
+            graph_outputs_dict = {'raw_embedding': graph_outputs}
+        elif isinstance(graph_outputs, dict) and 'graph_embedding' in graph_outputs:
+            # 如果graph_outputs是字典且包含graph_embedding键
+            graph_embedding = self.graph_projection(graph_outputs['graph_embedding'])
+            graph_outputs_dict = graph_outputs
+        else:
+            # 其他情况，假设graph_outputs是节点嵌入，进行全局池化
+            # 使用平均池化作为简单的全局表示
+            graph_embedding = torch.mean(graph_outputs, dim=0, keepdim=True)
+            graph_embedding = self.graph_projection(graph_embedding)
+            graph_outputs_dict = {'node_embeddings': graph_outputs}
         
         return {
             'graph_embedding': graph_embedding,
-            'graph_outputs': graph_outputs
+            'graph_outputs': graph_outputs_dict
         }
         
     def forward(
@@ -175,7 +182,6 @@ class DualEncoder(nn.Module):
         edge_indices_dict: Dict[str, torch.Tensor],
         edge_features_dict: Dict[str, torch.Tensor],
         time_series_features: Optional[torch.Tensor] = None,
-        node_hierarchies: Optional[torch.Tensor] = None,
         batch: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
@@ -189,8 +195,7 @@ class DualEncoder(nn.Module):
             edge_indices_dict: 边索引字典
             edge_features_dict: 边特征字典
             time_series_features: 时间序列特征
-            node_hierarchies: 节点层次信息
-            batch: 批量分配矩阵
+            batch: 批量分配矩阵（不使用）
             token_type_ids: token类型IDs
             
         Returns:
@@ -210,9 +215,7 @@ class DualEncoder(nn.Module):
             node_features=node_features,
             edge_indices_dict=edge_indices_dict,
             edge_features_dict=edge_features_dict,
-            time_series_features=time_series_features,
-            node_hierarchies=node_hierarchies,
-            batch=batch
+            time_series_features=time_series_features
         )
         
         # 获取嵌入

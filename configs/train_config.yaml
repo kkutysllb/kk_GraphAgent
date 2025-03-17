@@ -8,6 +8,9 @@ seed: 42
 
 # 数据配置
 data:
+  # 数据集配置
+  dataset_path: "datasets/full_dataset"
+  
   # Neo4j数据库配置
   neo4j_uri: "bolt://localhost:7687"
   neo4j_user: "neo4j"
@@ -18,10 +21,16 @@ data:
   max_text_length: 128  # 最大文本长度
   batch_size: 32  # 批量大小
   num_workers: 4  # 数据加载线程数
+  prefetch_factor: 2  # 预加载因子
+  persistent_workers: true  # 持久化工作进程
   
   # 数据增强配置
   augmentation: true  # 是否使用数据增强
   negative_sampling: "hard"  # 负样本采样策略 (random, hard, semi-hard)
+  
+  # 数据验证配置
+  validate_data: true  # 是否验证数据
+  max_retries: 3  # 数据加载重试次数
 
 # 模型配置
 model:
@@ -36,6 +45,14 @@ model:
   # 投影层配置
   projection_dim: 768  # 投影维度
   dropout: 0.1  # Dropout比率
+  
+  # 模型保存配置
+  save_best_only: true  # 只保存最佳模型
+  save_last: true  # 保存最后一个模型
+  
+  # 模型初始化配置
+  init_weights: true  # 是否初始化权重
+  pretrained: true  # 是否使用预训练权重
 
 # 损失函数配置
 loss:
@@ -59,10 +76,15 @@ training:
   gradient_accumulation_steps: 1  # 梯度累积步数
   max_grad_norm: 1.0  # 梯度裁剪阈值
   warmup_ratio: 0.1  # 预热比例
+  mixed_precision: true  # 是否使用混合精度训练
+  save_state: true  # 是否保存训练状态
   
   # 评估配置
   eval_steps: 100  # 评估步数
   save_steps: 500  # 保存步数
+  validation:
+    frequency: 1  # 验证频率（每N轮）
+    metrics: ["loss", "accuracy"]  # 验证指标
   
   # 早停配置
   early_stopping:
@@ -71,5 +93,18 @@ training:
 
 # 日志配置
 logging:
+  level: "INFO"  # 日志级别
   log_steps: 10  # 日志记录步数
-  tensorboard: true  # 是否使用TensorBoard 
+  tensorboard: true  # 是否使用TensorBoard
+  file:
+    enabled: true
+    path: "logs"
+    max_size: 100  # MB
+    backup_count: 5
+  
+  # 添加日志文件配置
+  file:
+    enabled: true
+    path: "logs"
+    max_size: 100  # MB
+    backup_count: 5 

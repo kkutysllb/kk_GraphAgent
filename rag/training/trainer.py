@@ -14,8 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 import logging
 import os
 from tqdm import tqdm
@@ -144,6 +143,10 @@ class Trainer(LoggerMixin):
         
         pbar = tqdm(self.train_loader, desc="Training")
         for batch in pbar:
+            # 检查批次是否为空
+            if not batch:
+                continue
+                
             # Move batch to device
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
@@ -153,14 +156,24 @@ class Trainer(LoggerMixin):
             batch_idx = batch.get('batch', None)
             if batch_idx is not None:
                 batch_idx = batch_idx.to(self.device)
+            
+            # 处理token_type_ids（如果存在）
+            token_type_ids = batch.get('token_type_ids', None)
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids.to(self.device)
+                
+            # 创建边特征字典（简化版，实际应用中应该从数据中提取）
+            edge_indices_dict = {'default': edge_index}
+            edge_features_dict = {'default': edge_features}
                 
             # Forward pass
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
                 node_features=node_features,
-                edge_index=edge_index,
-                edge_features=edge_features,
+                edge_indices_dict=edge_indices_dict,
+                edge_features_dict=edge_features_dict,
                 batch=batch_idx
             )
             
@@ -229,6 +242,10 @@ class Trainer(LoggerMixin):
         
         pbar = tqdm(self.val_loader, desc="Validating")
         for batch in pbar:
+            # 检查批次是否为空
+            if not batch:
+                continue
+                
             # Move batch to device
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
@@ -238,14 +255,24 @@ class Trainer(LoggerMixin):
             batch_idx = batch.get('batch', None)
             if batch_idx is not None:
                 batch_idx = batch_idx.to(self.device)
+            
+            # 处理token_type_ids（如果存在）
+            token_type_ids = batch.get('token_type_ids', None)
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids.to(self.device)
+                
+            # 创建边特征字典（简化版，实际应用中应该从数据中提取）
+            edge_indices_dict = {'default': edge_index}
+            edge_features_dict = {'default': edge_features}
                 
             # Forward pass
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
                 node_features=node_features,
-                edge_index=edge_index,
-                edge_features=edge_features,
+                edge_indices_dict=edge_indices_dict,
+                edge_features_dict=edge_features_dict,
                 batch=batch_idx
             )
             

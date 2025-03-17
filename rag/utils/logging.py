@@ -15,48 +15,38 @@ from typing import Optional
 import os
 from datetime import datetime
 
-def setup_logging(
-    log_file: Optional[str] = None,
-    level: int = logging.INFO,
-    log_format: Optional[str] = None
-) -> logging.Logger:
+def setup_logging(name: str, log_file: str = None) -> logging.Logger:
     """
-    设置日志配置
+    设置日志记录器
     
     Args:
-        log_file: 日志文件路径。如果为None，则仅输出到标准输出
-        level: 日志级别
-        log_format: 自定义日志格式字符串
+        name: 日志记录器名称
+        log_file: 日志文件路径（可选）
         
     Returns:
-        日志实例
+        logging.Logger: 配置好的日志记录器
     """
-    # 创建日志记录器
-    logger = logging.getLogger()
-    logger.setLevel(level)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
     
-    # 默认格式
-    if log_format is None:
-        log_format = '[%(asctime)s] %(levelname)s - %(name)s - %(message)s'
-        
-    formatter = logging.Formatter(log_format)
+    # 创建格式化器
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # 控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
+    # 添加控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # 文件处理器
+    # 如果指定了日志文件，添加文件处理器
     if log_file:
-        # 如果日志目录不存在，则创建它
-        log_dir = os.path.dirname(log_file)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-            
-        file_handler = logging.FileHandler(log_file)
+        # 确保日志目录存在
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-        
+    
     return logger
     
 def get_experiment_logger(
@@ -82,7 +72,7 @@ def get_experiment_logger(
         f"{experiment_name}_{timestamp}.log"
     )
     
-    return setup_logging(log_file)
+    return setup_logging(experiment_name, log_file)
     
 class LoggerMixin:
     """Mixin类，用于为任何类添加日志记录功能"""

@@ -219,16 +219,39 @@ def generate_dataset(
                 data_to_save = []
                 for i in range(len(dataset)):
                     item = dataset[i]
+                    
+                    # 提取或生成特征
+                    node_id = item['node_id']
+                    subgraph = item['subgraph']
+                    
+                    # 使用特征提取器获取节点特征
+                    node_features = feature_extractor.extract_node_features(node_id)
+                    
+                    # 提取边特征
+                    edge_features = {}
+                    for edge in subgraph.get('edges', []):
+                        edge_id = edge.get('id')
+                        if edge_id:
+                            edge_features[edge_id] = feature_extractor.extract_edge_features(edge_id)
+                    
+                    # 保存完整的数据，包括特征
                     data_to_save.append({
                         'node_id': item['node_id'],
                         'text': item['text'],
                         'subgraph': item['subgraph'],
-                        'node_type': item['node_type']
+                        'node_type': item['node_type'],
+                        'node_features': node_features.tolist() if isinstance(node_features, torch.Tensor) else node_features,
+                        'edge_features': {k: v.tolist() if isinstance(v, torch.Tensor) else v for k, v in edge_features.items()},
+                        'label': item.get('label', 1),  # 正样本默认标签为1
+                        'is_negative': item.get('is_negative', False),
+                        'negative_type': item.get('negative_type', None)
                     })
                 
                 # 保存为JSON文件
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+                    
+                logger.info(f"数据集已保存到 {file_path}，包含 {len(data_to_save)} 个样本")
             
             # 保存训练集
             train_file = output_path / "train_dataset.json"
