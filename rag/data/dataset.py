@@ -9,6 +9,7 @@
 # --------------------------------------------------------
 """
 
+import torch
 from torch.utils.data import Dataset
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any, Counter
@@ -145,63 +146,61 @@ class GraphTextDataset(Dataset, LoggerMixin):
         # 初始化数据集大小
         self.dataset_size = len(self.pairs)
     
-    def save(self, file_path: str):
+    def save(self, file_path: str) -> None:
         """保存数据集到文件"""
-        import torch
-        
         # 准备要保存的数据
-        data_to_save = {
+        data = {
+            'node_types': self.node_types,
+            'edge_types': self.edge_types,
+            'max_text_length': self.max_text_length,
+            'max_node_size': self.max_node_size,
+            'max_edge_size': self.max_edge_size,
+            'include_dynamic': self.include_dynamic,
+            'data_augmentation': self.data_augmentation,
+            'balance_node_types': self.balance_node_types,
+            'adaptive_subgraph_size': self.adaptive_subgraph_size,
+            'negative_sample_ratio': self.negative_sample_ratio,
+            'split': self.split,
+            'split_ratio': self.split_ratio,
+            'seed': self.seed,
             'pairs': self.pairs,
-            'config': {
-                'node_types': self.node_types,
-                'edge_types': self.edge_types,
-                'max_text_length': self.max_text_length,
-                'max_node_size': self.max_node_size,
-                'max_edge_size': self.max_edge_size,
-                'include_dynamic': self.include_dynamic,
-                'data_augmentation': self.data_augmentation,
-                'balance_node_types': self.balance_node_types,
-                'adaptive_subgraph_size': self.adaptive_subgraph_size,
-                'negative_sample_ratio': self.negative_sample_ratio,
-                'split': self.split,
-                'split_ratio': self.split_ratio,
-                'seed': self.seed
-            }
+            'dataset_size': len(self.pairs)
         }
         
-        # 使用torch.save保存数据
-        torch.save(data_to_save, file_path)
+        # 保存数据
+        torch.save(data, file_path)
     
     @classmethod
-    def load(cls, file_path: str):
+    def load(cls, file_path: str) -> 'GraphTextDataset':
         """从文件加载数据集"""
-        import torch
+        # 添加numpy数组重建函数到安全全局变量列表
+        from numpy.core.multiarray import _reconstruct
+        torch.serialization.add_safe_globals([_reconstruct])
         
         # 加载数据
-        data = torch.load(file_path)
+        data = torch.load(file_path, weights_only=False)
         
         # 创建数据集实例
         dataset = cls.__new__(cls)
         
-        # 设置配置
-        config = data['config']
-        dataset.node_types = config['node_types']
-        dataset.edge_types = config['edge_types']
-        dataset.max_text_length = config['max_text_length']
-        dataset.max_node_size = config['max_node_size']
-        dataset.max_edge_size = config['max_edge_size']
-        dataset.include_dynamic = config['include_dynamic']
-        dataset.data_augmentation = config['data_augmentation']
-        dataset.balance_node_types = config['balance_node_types']
-        dataset.adaptive_subgraph_size = config['adaptive_subgraph_size']
-        dataset.negative_sample_ratio = config['negative_sample_ratio']
-        dataset.split = config['split']
-        dataset.split_ratio = config['split_ratio']
-        dataset.seed = config['seed']
+        # 设置基本属性
+        dataset.node_types = data['node_types']
+        dataset.edge_types = data['edge_types']
+        dataset.max_text_length = data['max_text_length']
+        dataset.max_node_size = data['max_node_size']
+        dataset.max_edge_size = data['max_edge_size']
+        dataset.include_dynamic = data['include_dynamic']
+        dataset.data_augmentation = data['data_augmentation']
+        dataset.balance_node_types = data['balance_node_types']
+        dataset.adaptive_subgraph_size = data['adaptive_subgraph_size']
+        dataset.negative_sample_ratio = data['negative_sample_ratio']
+        dataset.split = data['split']
+        dataset.split_ratio = data['split_ratio']
+        dataset.seed = data['seed']
         
         # 设置数据
         dataset.pairs = data['pairs']
-        dataset.dataset_size = len(dataset.pairs)
+        dataset.dataset_size = data.get('dataset_size', len(dataset.pairs))
         
         # 设置其他属性
         dataset.graph_manager = None

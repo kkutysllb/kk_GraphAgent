@@ -1,0 +1,66 @@
+data:
+  augmentation: true
+  batch_size: 32
+  dataset_path: datasets/full_dataset
+  max_graph_size: 100
+  max_retries: 3
+  max_text_length: 128
+  negative_sampling: hard
+  neo4j_password: password
+  neo4j_uri: bolt://localhost:7687
+  neo4j_user: neo4j
+  num_workers: 4
+  persistent_workers: true
+  prefetch_factor: 2
+  validate_data: true
+experiment_name: dual_encoder_base
+logging:
+  file:
+    backup_count: 5
+    enabled: true
+    max_size: 100
+    path: logs
+  level: INFO
+  log_steps: 10
+  tensorboard: true
+loss:
+  contrastive_weight: 1.0
+  margin: 0.3
+  mining_strategy: semi-hard
+  temperature: 0.07
+  triplet_weight: 0.5
+  type: combined
+  use_hard_negatives: true
+model:
+  dropout: 0.1
+  graph_hidden_dim: 256
+  graph_num_layers: 3
+  init_weights: true
+  pretrained: true
+  projection_dim: 768
+  save_best_only: true
+  save_last: true
+  text_encoder_name: bert-base-chinese
+  text_pooling_strategy: cls
+optimizer:
+  lr: 2.0e-05
+  min_lr: 1.0e-06
+  weight_decay: 0.01
+seed: 42
+training:
+  early_stopping:
+    min_delta: 0.001
+    patience: 3
+  eval_steps: 100
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  mixed_precision: true
+  num_epochs: 20
+  save_state: true
+  save_steps: 500
+  validation:
+    frequency: 1
+    metrics:
+    - loss
+    - accuracy
+  warmup_ratio: 0.1

@@ -165,19 +165,17 @@ class TrainingManager:
         logger.info(f"从 {dataset_path} 加载数据集...")
         
         # 加载数据集配置
-        with open(os.path.join(dataset_path, 'dataset_config.json'), 'r') as f:
-            dataset_config = json.load(f)
+        dataset_stats = torch.load(os.path.join(dataset_path, 'dataset_stats.pt'))
+        dataset_config = dataset_stats['config']
             
         logger.info(f"数据集配置: {dataset_config}")
         
         # 创建数据集
-        train_dataset = GraphTextDataset.from_dataset(
-            os.path.join(dataset_path, 'train_dataset.json'),
-            dataset_config
+        train_dataset = GraphTextDataset.load(
+            os.path.join(dataset_path, 'train.pt')
         )
-        val_dataset = GraphTextDataset.from_dataset(
-            os.path.join(dataset_path, 'val_dataset.json'),
-            dataset_config
+        val_dataset = GraphTextDataset.load(
+            os.path.join(dataset_path, 'val.pt')
         )
         
         # 确保数据集有collate_fn方法
