@@ -65,13 +65,13 @@ def generate_dataset(
     adaptive_subgraph_size: bool = True,
     negative_sample_ratio: float = 0.3,
     data_augmentation: bool = True,
-    train_ratio: float = 0.7,
-    val_ratio: float = 0.15,
-    test_ratio: float = 0.15,
-    num_workers: int = 8,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
+    test_ratio: float = 0.1,
+    num_workers: int = 4,
     seed: int = 42
 ):
-    """生成完整的训练、验证和测试数据集"""
+    """生成数据集"""
     start_time = time.time()
     logger.info("开始生成数据集...")
     logger.info(f"参数: balance_node_types={balance_node_types}, adaptive_subgraph_size={adaptive_subgraph_size}, "
@@ -137,13 +137,6 @@ def generate_dataset(
         dataset_logger.setLevel(logging.WARNING)
         
         try:
-            # 设置数据集分割比例
-            split_ratio = {
-                "train": train_ratio,
-                "val": val_ratio,
-                "test": test_ratio
-            }
-            
             # 创建训练集
             logger.info("创建训练集...")
             train_dataset = GraphTextDataset(
@@ -159,9 +152,8 @@ def generate_dataset(
                 adaptive_subgraph_size=adaptive_subgraph_size,
                 negative_sample_ratio=negative_sample_ratio,
                 split="train",
-                split_ratio=split_ratio,
-                seed=seed,
-                skip_internal_split=True
+                split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
+                seed=seed
             )
             logger.info(f"训练集创建完成，包含 {len(train_dataset.pairs)} 个样本")
             
@@ -178,11 +170,10 @@ def generate_dataset(
                 data_augmentation=False,  # 验证集不使用数据增强
                 balance_node_types=False,  # 验证集不平衡节点类型
                 adaptive_subgraph_size=adaptive_subgraph_size,
-                negative_sample_ratio=negative_sample_ratio * 0.5,  # 验证集负样本比例减半
+                negative_sample_ratio=0,  # 验证集不需要负样本
                 split="val",
-                split_ratio=split_ratio,
-                seed=seed,
-                skip_internal_split=True
+                split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
+                seed=seed
             )
             logger.info(f"验证集创建完成，包含 {len(val_dataset.pairs)} 个样本")
             
@@ -199,11 +190,10 @@ def generate_dataset(
                 data_augmentation=False,  # 测试集不使用数据增强
                 balance_node_types=False,  # 测试集不平衡节点类型
                 adaptive_subgraph_size=adaptive_subgraph_size,
-                negative_sample_ratio=negative_sample_ratio * 0.5,  # 测试集负样本比例减半
+                negative_sample_ratio=0,  # 测试集不需要负样本
                 split="test",
-                split_ratio=split_ratio,
-                seed=seed,
-                skip_internal_split=True
+                split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
+                seed=seed
             )
             logger.info(f"测试集创建完成，包含 {len(test_dataset.pairs)} 个样本")
             
@@ -213,82 +203,42 @@ def generate_dataset(
             # 创建保存数据的目录
             output_path.mkdir(parents=True, exist_ok=True)
             
-            # 定义保存数据集的函数
-            def save_dataset_to_json(dataset, file_path):
-                # 提取需要保存的数据
-                data_to_save = []
-                for i in range(len(dataset)):
-                    item = dataset[i]
-                    
-                    # 提取或生成特征
-                    node_id = item['node_id']
-                    subgraph = item['subgraph']
-                    
-                    # 使用特征提取器获取节点特征
-                    node_features = feature_extractor.extract_node_features(node_id)
-                    
-                    # 提取边特征
-                    edge_features = {}
-                    for edge in subgraph.get('edges', []):
-                        edge_id = edge.get('id')
-                        if edge_id:
-                            edge_features[edge_id] = feature_extractor.extract_edge_features(edge_id)
-                    
-                    # 保存完整的数据，包括特征
-                    data_to_save.append({
-                        'node_id': item['node_id'],
-                        'text': item['text'],
-                        'subgraph': item['subgraph'],
-                        'node_type': item['node_type'],
-                        'node_features': node_features.tolist() if isinstance(node_features, torch.Tensor) else node_features,
-                        'edge_features': {k: v.tolist() if isinstance(v, torch.Tensor) else v for k, v in edge_features.items()},
-                        'label': item.get('label', 1),  # 正样本默认标签为1
-                        'is_negative': item.get('is_negative', False),
-                        'negative_type': item.get('negative_type', None)
-                    })
-                
-                # 保存为JSON文件
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-                    
-                logger.info(f"数据集已保存到 {file_path}，包含 {len(data_to_save)} 个样本")
-            
             # 保存训练集
-            train_file = output_path / "train_dataset.json"
-            save_dataset_to_json(train_dataset, train_file)
+            train_file = output_path / "train.pt"
+            train_dataset.save(train_file)
             logger.info(f"训练集已保存到 {train_file}")
             
             # 保存验证集
-            val_file = output_path / "val_dataset.json"
-            save_dataset_to_json(val_dataset, val_file)
+            val_file = output_path / "val.pt"
+            val_dataset.save(val_file)
             logger.info(f"验证集已保存到 {val_file}")
             
             # 保存测试集
-            test_file = output_path / "test_dataset.json"
-            save_dataset_to_json(test_dataset, test_file)
+            test_file = output_path / "test.pt"
+            test_dataset.save(test_file)
             logger.info(f"测试集已保存到 {test_file}")
             
-            # 保存数据集配置信息
-            config_file = output_path / "dataset_config.json"
-            node_types = graph_config.get('node_types')
-            edge_types = graph_config.get('edge_types')
-            config_info = {
+            # 保存数据集统计信息
+            logger.info("保存数据集统计信息...")
+            stats = {
                 "train_size": len(train_dataset),
                 "val_size": len(val_dataset),
                 "test_size": len(test_dataset),
-                "node_types": node_types,
-                "edge_types": edge_types,
-                "balance_node_types": balance_node_types,
-                "adaptive_subgraph_size": adaptive_subgraph_size,
-                "negative_sample_ratio": negative_sample_ratio,
-                "data_augmentation": data_augmentation,
-                "split_ratio": split_ratio,
-                "seed": seed,
-                "creation_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "node_types": list(node_type_counts.keys()),
+                "edge_types": feature_extractor.relationship_types,
+                "config": {
+                    "balance_node_types": balance_node_types,
+                    "adaptive_subgraph_size": adaptive_subgraph_size,
+                    "negative_sample_ratio": negative_sample_ratio,
+                    "data_augmentation": data_augmentation,
+                    "train_ratio": train_ratio,
+                    "val_ratio": val_ratio,
+                    "test_ratio": test_ratio,
+                    "seed": seed
+                }
             }
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config_info, f, ensure_ascii=False, indent=2)
-            logger.info(f"数据集配置信息已保存到 {config_file}")
+            torch.save(stats, output_path / "dataset_stats.pt")
+            logger.info(f"数据集统计信息已保存到 {output_path / 'dataset_stats.pt'}")
             
             # 保存样本示例
             logger.info("保存样本示例...")
@@ -369,17 +319,18 @@ def generate_dataset(
 
 if __name__ == "__main__":
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description="生成完整的训练、验证和测试数据集")
-    parser.add_argument("--output_dir", type=str, default="datasets", help="输出目录")
-    parser.add_argument("--balance", action="store_true", help="是否平衡节点类型")
-    parser.add_argument("--adaptive", action="store_true", help="是否使用自适应子图大小")
-    parser.add_argument("--negative_ratio", type=float, default=0.3, help="负样本比例")
-    parser.add_argument("--augmentation", action="store_true", help="是否使用数据增强")
-    parser.add_argument("--train_ratio", type=float, default=0.7, help="训练集比例")
-    parser.add_argument("--val_ratio", type=float, default=0.15, help="验证集比例")
-    parser.add_argument("--test_ratio", type=float, default=0.15, help="测试集比例")
-    parser.add_argument("--workers", type=int, default=8, help="工作线程数")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser = argparse.ArgumentParser(description="Generate graph-text dataset")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for the dataset")
+    parser.add_argument("--balance", action="store_true", help="Balance node types in training set")
+    parser.add_argument("--adaptive", action="store_true", help="Use adaptive subgraph size")
+    parser.add_argument("--augmentation", action="store_true", help="Apply data augmentation")
+    parser.add_argument("--negative_ratio", type=float, default=0.3, help="Ratio of negative samples")
+    parser.add_argument("--train_ratio", type=float, default=0.8, help="Ratio of training set")
+    parser.add_argument("--val_ratio", type=float, default=0.1, help="Ratio of validation set")
+    parser.add_argument("--test_ratio", type=float, default=0.1, help="Ratio of test set")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    
     args = parser.parse_args()
     
     # 生成数据集
@@ -392,6 +343,6 @@ if __name__ == "__main__":
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
-        num_workers=args.workers,
+        num_workers=args.num_workers,
         seed=args.seed
     ) 
