@@ -12,7 +12,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, List, Union, Tuple
+from typing import Dict, Optional, Tuple
 
 class ContrastiveLoss(nn.Module):
     """对比损失用于相似性学习"""
@@ -257,69 +257,43 @@ class BatchContrastiveLoss(nn.Module):
         hard_negatives: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        前向传播
+        计算批次对比损失
         
         Args:
-            text_embeddings: 文本嵌入（batch_size x dim）
-            graph_embeddings: 图嵌入（batch_size x dim）
-            hard_negatives: 可选元组（text_hard_negatives, graph_hard_negatives）
+            text_embeddings: 文本嵌入 [batch_size, embedding_dim]
+            graph_embeddings: 图嵌入 [batch_size, embedding_dim]
+            hard_negatives: 硬负样本 (text_embeddings, graph_embeddings)
             
         Returns:
-            包含:
-                - loss: 对比损失值
-                - text_to_graph_accuracy: 文本到图检索准确率
-                - graph_to_text_accuracy: 图到文本检索准确率
-                - similarity: 相似度矩阵
+            损失字典
         """
-        # 归一化嵌入
-        text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
-        graph_embeddings = F.normalize(graph_embeddings, p=2, dim=1)
-        
+        # 确保输入维度匹配
         batch_size = text_embeddings.size(0)
+        if batch_size != graph_embeddings.size(0):
+            raise ValueError(f"Text embeddings batch size ({batch_size}) does not match graph embeddings batch size ({graph_embeddings.size(0)})")
         
         # 计算相似度矩阵
-        similarity = torch.matmul(text_embeddings, graph_embeddings.t()) / self.temperature
+        similarity = F.cosine_similarity(text_embeddings.unsqueeze(1), graph_embeddings.unsqueeze(0), dim=2)
+        similarity = similarity / self.temperature
         
-        # 创建标签（对角线是正样本对）
-        labels = torch.arange(batch_size, device=text_embeddings.device)
+        # 创建标签（对角线上的元素为正样本）
+        labels = torch.arange(batch_size, device=similarity.device)
         
-        # 如果提供了硬负样本，则纳入硬负样本
-        if self.use_hard_negatives and hard_negatives is not None:
-            text_hard_negatives, graph_hard_negatives = hard_negatives
-            
-            # 归一化硬负样本
-            text_hard_negatives = F.normalize(text_hard_negatives, p=2, dim=1)
-            graph_hard_negatives = F.normalize(graph_hard_negatives, p=2, dim=1)
-            
-            # 计算相似度
-            text_to_hard_graph = torch.matmul(text_embeddings, graph_hard_negatives.t()) / self.temperature
-            hard_text_to_graph = torch.matmul(text_hard_negatives, graph_embeddings.t()) / self.temperature
-            
-            # 与批次相似度结合
-            text_to_graph_sim = torch.cat([similarity, text_to_hard_graph], dim=1)
-            graph_to_text_sim = torch.cat([similarity.t(), hard_text_to_graph.t()], dim=1)
-        else:
-            text_to_graph_sim = similarity
-            graph_to_text_sim = similarity.t()
-        
-        # 计算文本到图的损失
-        text_to_graph_loss = F.cross_entropy(text_to_graph_sim, labels)
-        
-        # 计算图到文本的损失
-        graph_to_text_loss = F.cross_entropy(graph_to_text_sim, labels)
-        
-        # 结合损失
-        loss = (text_to_graph_loss + graph_to_text_loss) / 2
+        # 计算基本损失（不使用硬负样本）
+        text_to_graph_loss = F.cross_entropy(similarity, labels)
+        # 对转置后的相似度矩阵计算损失，确保维度与标签匹配
+        graph_to_text_loss = F.cross_entropy(similarity.t(), labels)
         
         # 计算准确率
-        text_to_graph_accuracy = (text_to_graph_sim.argmax(dim=1) == labels).float().mean()
-        graph_to_text_accuracy = (graph_to_text_sim.argmax(dim=1) == labels).float().mean()
+        text_to_graph_acc = (similarity.argmax(dim=1) == labels).float().mean()
+        graph_to_text_acc = (similarity.t().argmax(dim=1) == labels).float().mean()
         
         return {
-            'loss': loss,
-            'text_to_graph_accuracy': text_to_graph_accuracy,
-            'graph_to_text_accuracy': graph_to_text_accuracy,
-            'similarity': similarity
+            "loss": text_to_graph_loss + graph_to_text_loss,
+            "text_to_graph_loss": text_to_graph_loss,
+            "graph_to_text_loss": graph_to_text_loss,
+            "text_to_graph_acc": text_to_graph_acc,
+            "graph_to_text_acc": graph_to_text_acc
         }
 
 class MultiPositiveLoss(nn.Module):
@@ -422,11 +396,17 @@ class CombinedLoss(nn.Module):
         super().__init__()
         self.contrastive_weight = contrastive_weight
         self.triplet_weight = triplet_weight
+        
+        # 创建一个简单版本的BatchContrastiveLoss
+        # 这个版本不会在forward方法中尝试处理硬负样本
         self.batch_contrastive = BatchContrastiveLoss(
             temperature=temperature,
-            use_hard_negatives=use_hard_negatives
+            use_hard_negatives=False  # 禁用硬负样本处理
         )
+        
         self.triplet = TripletLoss(margin=margin)
+        self.use_hard_negatives = use_hard_negatives
+        self.temperature = temperature
         
     def forward(
         self,
@@ -451,21 +431,48 @@ class CombinedLoss(nn.Module):
                 - triplet_loss: 三元组损失组件（如果使用）
                 - accuracy: 总体准确率
         """
-        # 计算对比损失
-        contrastive_results = self.batch_contrastive(
-            text_embeddings, 
-            graph_embeddings,
-            hard_negatives
-        )
+        # 计算标准对比损失，不使用硬负样本
+        contrastive_results = self.batch_contrastive(text_embeddings, graph_embeddings)
         contrastive_loss = contrastive_results['loss']
+        
+        # 如果有硬负样本并启用了硬负样本功能
+        # 但在这里单独处理，而不是通过BatchContrastiveLoss
+        if hard_negatives is not None and self.use_hard_negatives:
+            hn_text_emb, hn_graph_emb = hard_negatives
+            batch_size = text_embeddings.size(0)
+            
+            # 归一化所有嵌入
+            text_norm = F.normalize(text_embeddings, dim=1)
+            graph_norm = F.normalize(graph_embeddings, dim=1)
+            hn_text_norm = F.normalize(hn_text_emb, dim=1)
+            hn_graph_norm = F.normalize(hn_graph_emb, dim=1)
+            
+            # 计算基本相似度矩阵
+            similarity = torch.matmul(text_norm, graph_norm.t()) / self.temperature
+            
+            # 文本到硬负图的相似度
+            text_to_hn_graph = torch.matmul(text_norm, hn_graph_norm.t()) / self.temperature
+            
+            # 只扩展文本到图的方向
+            text_to_all_graph = torch.cat([similarity, text_to_hn_graph], dim=1)
+            
+            # 计算硬负样本增强的文本到图损失
+            labels = torch.arange(batch_size, device=text_embeddings.device)
+            enhanced_t2g_loss = F.cross_entropy(text_to_all_graph, labels)
+            
+            # 计算标准图到文本损失（不使用硬负样本）
+            g2t_loss = F.cross_entropy(similarity.t(), labels)
+            
+            # 更新对比损失为增强版本
+            contrastive_loss = (enhanced_t2g_loss + g2t_loss) / 2
         
         # 初始化结果字典
         result_dict = {
             'contrastive_loss': contrastive_loss,
-            'text_to_graph_accuracy': contrastive_results['text_to_graph_accuracy'],
-            'graph_to_text_accuracy': contrastive_results['graph_to_text_accuracy'],
-            'accuracy': (contrastive_results['text_to_graph_accuracy'] + 
-                        contrastive_results['graph_to_text_accuracy']) / 2
+            'text_to_graph_acc': contrastive_results['text_to_graph_acc'],
+            'graph_to_text_acc': contrastive_results['graph_to_text_acc'],
+            'accuracy': (contrastive_results['text_to_graph_acc'] + 
+                        contrastive_results['graph_to_text_acc']) / 2
         }
         
         # 如果权重大于0且数据提供，则计算三元组损失

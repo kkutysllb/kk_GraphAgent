@@ -20,6 +20,7 @@ from tqdm import tqdm
 import math
 from collections import defaultdict
 import threading
+import uuid
 
 
 from ..feature_extractor import FeatureExtractor
@@ -1532,13 +1533,27 @@ class GraphTextDataset(Dataset, LoggerMixin):
             GraphTextDataset实例
         """
         dataset = cls.__new__(cls)
-        dataset.samples = samples
-        dataset.config = config
-        dataset.node_types = config['node_types']
-        dataset.edge_types = config['edge_types']
+        dataset.pairs = samples
+        dataset.dataset_size = len(samples)
+        
+        # 从配置中设置属性
+        dataset.node_types = config.get('node_types', ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"])
+        dataset.edge_types = config.get('edge_types', ["DC_TO_TENANT", "TENANT_TO_NE", "NE_TO_VM", "VM_TO_HOST", "HOST_TO_HA", "HA_TO_TRU"])
         dataset.max_text_length = config.get('max_text_length', 512)
         dataset.max_node_size = config.get('max_node_size', 100)
         dataset.max_edge_size = config.get('max_edge_size', 200)
+        dataset.include_dynamic = config.get('include_dynamic', True)
+        dataset.data_augmentation = config.get('data_augmentation', True)
+        dataset.balance_node_types = config.get('balance_node_types', True)
+        dataset.adaptive_subgraph_size = config.get('adaptive_subgraph_size', True)
+        dataset.negative_sample_ratio = config.get('negative_sample_ratio', 0.5)
+        dataset.split = config.get('split', 'train')
+        dataset.split_ratio = config.get('split_ratio', {"train": 0.8, "val": 0.1, "test": 0.1})
+        dataset.seed = config.get('seed', 42)
+        
+        # 设置其他属性
+        dataset.graph_manager = None
+        dataset.feature_extractor = None
         
         return dataset
         
@@ -1609,6 +1624,8 @@ class GraphTextDataset(Dataset, LoggerMixin):
         if not batch:
             return {}
         
+        batch_size = len(batch)
+        
         # 提取文本和图特征
         texts = [item.get('text', '') for item in batch]
         node_ids = [item.get('node_id', '') for item in batch]
@@ -1638,7 +1655,6 @@ class GraphTextDataset(Dataset, LoggerMixin):
         node_features = torch.stack(node_features_list)
         
         # 处理边特征和边索引
-        batch_size = len(batch)
         edge_indices = []
         edge_features_list = []
         edge_types = []
@@ -1654,48 +1670,55 @@ class GraphTextDataset(Dataset, LoggerMixin):
                 dst_idx = i
                 edge_indices.append([src_idx, dst_idx])
                 
-                edge_id = edge.get('id')
-                edge_type = edge.get('type', 'default')
+                # 处理不同格式的边数据
+                if isinstance(edge, dict):
+                    edge_id = edge.get('id', '')
+                    edge_type = edge.get('type', 'default')
+                elif isinstance(edge, str):
+                    edge_id = edge
+                    edge_type = 'default'
+                else:
+                    print(f"遇到未知格式的边: {type(edge)}")
+                    edge_id = ''
+                    edge_type = 'default'
                 
-                if 'edge_features' in item and item['edge_features'] is not None and edge_id in item['edge_features']:
-                    edge_feat = item['edge_features'][edge_id]
+                # 查找边特征
+                edge_feat = None
+                if 'edge_features' in item and item['edge_features'] is not None:
+                    if isinstance(item['edge_features'], dict) and edge_id in item['edge_features']:
+                        edge_feat = item['edge_features'][edge_id]
+                
+                # 如果找到了特征，使用它；否则使用零向量
+                if edge_feat is not None:
                     if isinstance(edge_feat, list):
                         edge_features_list.append(torch.tensor(edge_feat, dtype=torch.float))
                     else:
                         edge_features_list.append(torch.tensor(edge_feat, dtype=torch.float))
                 else:
-                    edge_features_list.append(torch.randn(64))
+                    edge_features_list.append(torch.zeros(64))
                 
                 edge_types.append(edge_type)
         
-        # 如果没有边，创建一个默认边
+        # 如果没有边，为每个节点创建一个自环
         if not edge_indices:
             for i in range(batch_size):
                 edge_indices.append([i, i])
-                edge_features_list.append(torch.randn(64))
+                edge_features_list.append(torch.zeros(64))
                 edge_types.append('default')
         
         # 转换为张量
         edge_index = torch.tensor(edge_indices, dtype=torch.long).t()
-        edge_features = torch.stack(edge_features_list) if edge_features_list else torch.randn(1, 64)
+        edge_features = torch.stack(edge_features_list)
         
-        # 创建边类型字典
-        edge_indices_dict = {'default': edge_index}
-        edge_features_dict = {'default': edge_features}
+        # 确保所有特征的维度一致
+        if edge_features.size(0) != edge_index.size(1):
+            raise ValueError(f"边特征数量 ({edge_features.size(0)}) 与边索引数量 ({edge_index.size(1)}) 不匹配")
         
-        # 组合成批次
-        batch_data = {
-            'input_ids': text_encodings.input_ids,
-            'attention_mask': text_encodings.attention_mask,
-            'token_type_ids': text_encodings.token_type_ids if hasattr(text_encodings, 'token_type_ids') else None,
+        return {
+            'text_encodings': text_encodings,
             'node_features': node_features,
-            'edge_features': edge_features,
             'edge_index': edge_index,
-            'edge_indices_dict': edge_indices_dict,
-            'edge_features_dict': edge_features_dict,
-            'batch': torch.arange(batch_size),
-            'node_ids': node_ids,
-            'texts': texts
+            'edge_features': edge_features,
+            'edge_types': edge_types,
+            'node_ids': node_ids
         }
-        
-        return batch_data

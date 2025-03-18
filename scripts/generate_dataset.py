@@ -7,6 +7,33 @@
 # @Date   : 2025-03-16 15:00
 # @Desc   : 生成完整的训练、验证和测试数据集
 # --------------------------------------------------------
+
+数据集生成脚本 - 创建图-文训练、验证和测试数据集
+
+主要功能:
+1. 从Neo4j数据库加载节点和边数据
+2. 为每个节点生成自然语言描述
+3. 创建图-文对用于训练双通道编码器
+4. 按照指定比例分割数据集
+5. 应用数据增强和负样本生成
+6. 保存数据集为.pt格式，提高加载效率
+
+最新优化(2025-03-26):
+1. 修复了数据集分割比例不协调问题
+   - 之前问题: GraphTextDataset初始化和generate_dataset.py中存在重复分割
+   - 解决方案: 使用skip_internal_split=True跳过内部分割，实现一次性正确分割
+   
+2. 实现.pt格式支持
+   - 使用torch.save和torch.load替代JSON保存和加载
+   - 优化了数据结构，提高加载速度
+   
+3. 优化数据增强流程
+   - 仅对训练集应用增强，保持验证集和测试集原始数据
+
+使用方法:
+python scripts/generate_dataset.py --output_dir datasets/full_dataset --balance --adaptive --augmentation
+
+详细文档: docs/dataset_generation.md
 """
 
 import os
@@ -23,6 +50,7 @@ import concurrent.futures
 import threading
 from tqdm import tqdm
 from datetime import datetime
+from collections import defaultdict
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +59,7 @@ from preprocess.utils.neo4j_graph_manager import Neo4jGraphManager
 from rag.feature_extractor import FeatureExtractor
 from rag.data.dataset import GraphTextDataset
 from rag.utils.config import get_database_config, get_dataset_config, get_graph_config
+from rag.utils.logging import LoggerMixin
 
 # 添加线程本地存储，避免多线程共享连接
 thread_local = threading.local()
@@ -137,9 +166,9 @@ def generate_dataset(
         dataset_logger.setLevel(logging.WARNING)
         
         try:
-            # 创建训练集
-            logger.info("创建训练集...")
-            train_dataset = GraphTextDataset(
+            # 首先创建一个完整的数据集，跳过内部分割
+            logger.info("创建完整数据集...")
+            full_dataset = GraphTextDataset(
                 graph_manager=graph_manager,
                 feature_extractor=feature_extractor,
                 node_types=graph_config.get('node_types'),
@@ -147,55 +176,117 @@ def generate_dataset(
                 max_node_size=dataset_config.get('max_node_size', 50),
                 max_edge_size=dataset_config.get('max_edge_size', 100),
                 include_dynamic=dataset_config.get('include_dynamic', True),
-                data_augmentation=data_augmentation,
-                balance_node_types=balance_node_types,
+                data_augmentation=False,  # 暂不应用数据增强
+                balance_node_types=False,  # 暂不平衡节点类型
                 adaptive_subgraph_size=adaptive_subgraph_size,
-                negative_sample_ratio=negative_sample_ratio,
-                split="train",
+                negative_sample_ratio=0,   # 暂不生成负样本
+                split="train",  # 这里的split参数不重要，因为跳过了内部分割
                 split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
-                seed=seed
+                seed=seed,
+                skip_internal_split=True   # 跳过内部分割
             )
-            logger.info(f"训练集创建完成，包含 {len(train_dataset.pairs)} 个样本")
+            logger.info(f"完整数据集创建完成，包含 {len(full_dataset.pairs)} 个样本")
+            
+            # 手动分割数据集
+            all_pairs = full_dataset.pairs.copy()
+            random.shuffle(all_pairs)  # 随机打乱
+            
+            # 按节点类型分组，以保持各类型比例
+            pairs_by_type = defaultdict(list)
+            for pair in all_pairs:
+                pairs_by_type[pair["node_type"]].append(pair)
+            
+            # 为每种节点类型分别计算训练、验证和测试集的样本
+            train_pairs = []
+            val_pairs = []
+            test_pairs = []
+            
+            for node_type, type_pairs in pairs_by_type.items():
+                # 计算每种类型的分割点
+                train_end = int(len(type_pairs) * train_ratio)
+                val_end = train_end + int(len(type_pairs) * val_ratio)
+                
+                # 分割数据
+                train_pairs.extend(type_pairs[:train_end])
+                val_pairs.extend(type_pairs[train_end:val_end])
+                test_pairs.extend(type_pairs[val_end:])
+            
+            logger.info(f"数据集分割: 训练集 {len(train_pairs)} 样本, 验证集 {len(val_pairs)} 样本, 测试集 {len(test_pairs)} 样本")
+            
+            # 创建训练集
+            logger.info("创建最终训练集...")
+            train_dataset = GraphTextDataset.__new__(GraphTextDataset)
+            # 初始化LoggerMixin
+            LoggerMixin.__init__(train_dataset)
+            # 复制基本属性
+            for attr in ['graph_manager', 'feature_extractor', 'node_types', 'edge_types', 
+                         'max_text_length', 'max_node_size', 'max_edge_size', 'include_dynamic',
+                         'split_ratio', 'seed', 'nodes', 'edges', 'text_descriptions']:
+                setattr(train_dataset, attr, getattr(full_dataset, attr))
+            # 设置特定属性
+            train_dataset.pairs = train_pairs
+            train_dataset.split = "train"
+            train_dataset.data_augmentation = data_augmentation
+            train_dataset.balance_node_types = balance_node_types
+            train_dataset.adaptive_subgraph_size = adaptive_subgraph_size
+            train_dataset.negative_sample_ratio = negative_sample_ratio
+            
+            # 平衡节点类型（如果启用）
+            if balance_node_types:
+                train_dataset.pairs = train_dataset._balance_node_types()
+                logger.info(f"应用节点类型平衡后，训练集包含 {len(train_dataset.pairs)} 个样本")
+            
+            # 生成负样本（如果启用）
+            if negative_sample_ratio > 0:
+                negative_pairs = train_dataset._generate_negative_samples()
+                train_dataset.pairs.extend(negative_pairs)
+                logger.info(f"添加 {len(negative_pairs)} 个负样本后，训练集包含 {len(train_dataset.pairs)} 个样本")
+            
+            # 应用数据增强（如果启用）
+            if data_augmentation:
+                augmented_pairs = train_dataset._apply_data_augmentation(train_dataset.pairs)
+                train_dataset.pairs.extend(augmented_pairs)
+                logger.info(f"应用数据增强后，训练集包含 {len(train_dataset.pairs)} 个样本")
+            
+            train_dataset.dataset_size = len(train_dataset.pairs)
             
             # 创建验证集
-            logger.info("创建验证集...")
-            val_dataset = GraphTextDataset(
-                graph_manager=graph_manager,
-                feature_extractor=feature_extractor,
-                node_types=graph_config.get('node_types'),
-                edge_types=graph_config.get('edge_types'),
-                max_node_size=dataset_config.get('max_node_size', 50),
-                max_edge_size=dataset_config.get('max_edge_size', 100),
-                include_dynamic=dataset_config.get('include_dynamic', True),
-                data_augmentation=False,  # 验证集不使用数据增强
-                balance_node_types=False,  # 验证集不平衡节点类型
-                adaptive_subgraph_size=adaptive_subgraph_size,
-                negative_sample_ratio=0,  # 验证集不需要负样本
-                split="val",
-                split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
-                seed=seed
-            )
-            logger.info(f"验证集创建完成，包含 {len(val_dataset.pairs)} 个样本")
+            logger.info("创建最终验证集...")
+            val_dataset = GraphTextDataset.__new__(GraphTextDataset)
+            # 初始化LoggerMixin
+            LoggerMixin.__init__(val_dataset)
+            # 复制基本属性
+            for attr in ['graph_manager', 'feature_extractor', 'node_types', 'edge_types', 
+                         'max_text_length', 'max_node_size', 'max_edge_size', 'include_dynamic',
+                         'split_ratio', 'seed', 'nodes', 'edges', 'text_descriptions']:
+                setattr(val_dataset, attr, getattr(full_dataset, attr))
+            # 设置特定属性
+            val_dataset.pairs = val_pairs
+            val_dataset.split = "val"
+            val_dataset.data_augmentation = False
+            val_dataset.balance_node_types = False
+            val_dataset.adaptive_subgraph_size = adaptive_subgraph_size
+            val_dataset.negative_sample_ratio = 0
+            val_dataset.dataset_size = len(val_dataset.pairs)
             
             # 创建测试集
-            logger.info("创建测试集...")
-            test_dataset = GraphTextDataset(
-                graph_manager=graph_manager,
-                feature_extractor=feature_extractor,
-                node_types=graph_config.get('node_types'),
-                edge_types=graph_config.get('edge_types'),
-                max_node_size=dataset_config.get('max_node_size', 50),
-                max_edge_size=dataset_config.get('max_edge_size', 100),
-                include_dynamic=dataset_config.get('include_dynamic', True),
-                data_augmentation=False,  # 测试集不使用数据增强
-                balance_node_types=False,  # 测试集不平衡节点类型
-                adaptive_subgraph_size=adaptive_subgraph_size,
-                negative_sample_ratio=0,  # 测试集不需要负样本
-                split="test",
-                split_ratio={"train": train_ratio, "val": val_ratio, "test": test_ratio},
-                seed=seed
-            )
-            logger.info(f"测试集创建完成，包含 {len(test_dataset.pairs)} 个样本")
+            logger.info("创建最终测试集...")
+            test_dataset = GraphTextDataset.__new__(GraphTextDataset)
+            # 初始化LoggerMixin
+            LoggerMixin.__init__(test_dataset)
+            # 复制基本属性
+            for attr in ['graph_manager', 'feature_extractor', 'node_types', 'edge_types', 
+                         'max_text_length', 'max_node_size', 'max_edge_size', 'include_dynamic',
+                         'split_ratio', 'seed', 'nodes', 'edges', 'text_descriptions']:
+                setattr(test_dataset, attr, getattr(full_dataset, attr))
+            # 设置特定属性
+            test_dataset.pairs = test_pairs
+            test_dataset.split = "test"
+            test_dataset.data_augmentation = False
+            test_dataset.balance_node_types = False
+            test_dataset.adaptive_subgraph_size = adaptive_subgraph_size
+            test_dataset.negative_sample_ratio = 0
+            test_dataset.dataset_size = len(test_dataset.pairs)
             
             # 保存数据集
             logger.info("保存数据集...")
@@ -206,17 +297,17 @@ def generate_dataset(
             # 保存训练集
             train_file = output_path / "train.pt"
             train_dataset.save(train_file)
-            logger.info(f"训练集已保存到 {train_file}")
+            logger.info(f"训练集已保存到 {train_file}，包含 {len(train_dataset)} 个样本")
             
             # 保存验证集
             val_file = output_path / "val.pt"
             val_dataset.save(val_file)
-            logger.info(f"验证集已保存到 {val_file}")
+            logger.info(f"验证集已保存到 {val_file}，包含 {len(val_dataset)} 个样本")
             
             # 保存测试集
             test_file = output_path / "test.pt"
             test_dataset.save(test_file)
-            logger.info(f"测试集已保存到 {test_file}")
+            logger.info(f"测试集已保存到 {test_file}，包含 {len(test_dataset)} 个样本")
             
             # 保存数据集统计信息
             logger.info("保存数据集统计信息...")
@@ -227,10 +318,10 @@ def generate_dataset(
                 "node_types": list(node_type_counts.keys()),
                 "edge_types": feature_extractor.relationship_types,
                 "config": {
-                    "balance_node_types": balance_node_types,
-                    "adaptive_subgraph_size": adaptive_subgraph_size,
-                    "negative_sample_ratio": negative_sample_ratio,
-                    "data_augmentation": data_augmentation,
+                "balance_node_types": balance_node_types,
+                "adaptive_subgraph_size": adaptive_subgraph_size,
+                "negative_sample_ratio": negative_sample_ratio,
+                "data_augmentation": data_augmentation,
                     "train_ratio": train_ratio,
                     "val_ratio": val_ratio,
                     "test_ratio": test_ratio,

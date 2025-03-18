@@ -11,7 +11,7 @@
 
 import torch
 import torch.nn as nn
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 from .text_encoder import TextEncoder
 from .dynamic_heterogeneous_graph_encoder import DynamicHeterogeneousGraphEncoder
@@ -27,8 +27,6 @@ class DualEncoder(nn.Module):
         time_series_dim: int = 32,
         hidden_dim: int = 256,
         output_dim: int = 768,
-        num_layers: int = 2,
-        num_heads: int = 8,
         dropout: float = 0.1,
         freeze_text: bool = False,
         node_types: List[str] = ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"],
@@ -91,6 +89,9 @@ class DualEncoder(nn.Module):
             nn.LayerNorm(output_dim),
             nn.Dropout(dropout)
         )
+        
+        self.node_types = node_types
+        self.edge_types = edge_types
         
     def encode_text(
         self,
@@ -177,65 +178,69 @@ class DualEncoder(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        node_features: torch.Tensor,
-        edge_indices_dict: Dict[str, torch.Tensor],
-        edge_features_dict: Dict[str, torch.Tensor],
-        time_series_features: Optional[torch.Tensor] = None,
-        batch: Optional[torch.Tensor] = None,
-        token_type_ids: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+        node_features: Optional[torch.Tensor] = None,
+        edge_index: Optional[torch.Tensor] = None,
+        edge_features: Optional[torch.Tensor] = None,
+        time_series_features: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         前向传播
         
         Args:
             input_ids: 输入token IDs
             attention_mask: 注意力掩码
-            node_features: 节点特征矩阵
-            edge_indices_dict: 边索引字典
-            edge_features_dict: 边特征字典
-            time_series_features: 时间序列特征
-            batch: 批量分配矩阵（不使用）
             token_type_ids: token类型IDs
+            node_features: 节点特征矩阵
+            edge_index: 边索引 (2 x num_edges)
+            edge_features: 边特征矩阵
+            time_series_features: 时间序列特征
             
         Returns:
-            包含:
-                - text_embedding: 文本嵌入
-                - graph_embedding: 图嵌入
-                - similarity: 嵌入之间的余弦相似度
+            文本嵌入和图嵌入的元组
         """
-        # 编码文本和图
-        text_outputs = self.encode_text(
+        # 生成注意力掩码（如果未提供）
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        
+        # 编码文本
+        text_outputs = self.text_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids
         )
         
-        graph_outputs = self.encode_graph(
+        # 准备图数据结构
+        edge_indices_dict = {'default': edge_index}
+        edge_features_dict = {'default': edge_features}
+        
+        # 编码图
+        graph_outputs = self.graph_encoder(
             node_features=node_features,
             edge_indices_dict=edge_indices_dict,
             edge_features_dict=edge_features_dict,
             time_series_features=time_series_features
         )
         
-        # 获取嵌入
-        text_embedding = text_outputs['text_embedding']
-        graph_embedding = graph_outputs['graph_embedding']
+        # 获取图嵌入
+        if isinstance(graph_outputs, torch.Tensor):
+            graph_embedding = graph_outputs
+        elif isinstance(graph_outputs, dict) and 'graph_embedding' in graph_outputs:
+            graph_embedding = graph_outputs['graph_embedding']
+        else:
+            # 默认情况：平均所有节点嵌入
+            graph_embedding = torch.mean(graph_outputs, dim=0)
         
-        # 计算相似度
-        similarity = torch.cosine_similarity(
-            text_embedding.unsqueeze(1),
-            graph_embedding.unsqueeze(0),
-            dim=-1
-        )
+        # 应用投影层
+        text_embedding = self.text_projection(text_outputs['pooled'])
+        graph_embedding = self.graph_projection(graph_embedding)
         
-        return {
-            'text_embedding': text_embedding,
-            'graph_embedding': graph_embedding,
-            'similarity': similarity,
-            'text_outputs': text_outputs['text_outputs'],
-            'graph_outputs': graph_outputs['graph_outputs']
-        }
+        # 归一化嵌入
+        text_embedding = nn.functional.normalize(text_embedding, p=2, dim=1)
+        graph_embedding = nn.functional.normalize(graph_embedding, p=2, dim=1)
+        
+        return text_embedding, graph_embedding
         
     def get_embedding_dim(self) -> int:
         """获取嵌入维度"""

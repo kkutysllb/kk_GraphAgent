@@ -19,7 +19,7 @@ data:
   # 数据处理配置
   max_graph_size: 100  # 最大图节点数
   max_text_length: 128  # 最大文本长度
-  batch_size: 32  # 批量大小
+  batch_size: 16  # 批量大小
   num_workers: 4  # 数据加载线程数
   prefetch_factor: 2  # 预加载因子
   persistent_workers: true  # 持久化工作进程
@@ -32,6 +32,10 @@ data:
   validate_data: true  # 是否验证数据
   max_retries: 3  # 数据加载重试次数
 
+  # 数据子集配置
+  use_subset: true  # 启用数据子集
+  subset_size: 100  # 只使用100个样本测试
+
 # 模型配置
 model:
   # 文本编码器配置
@@ -40,11 +44,11 @@ model:
   
   # 图编码器配置
   graph_hidden_dim: 256  # 图隐藏层维度
-  graph_num_layers: 3  # 图卷积层数
+  graph_num_layers: 2  # 图卷积层数
   
   # 投影层配置
   projection_dim: 768  # 投影维度
-  dropout: 0.1  # Dropout比率
+  dropout: 0.2  # Dropout比率
   
   # 模型保存配置
   save_best_only: true  # 只保存最佳模型
@@ -54,34 +58,52 @@ model:
   init_weights: true  # 是否初始化权重
   pretrained: true  # 是否使用预训练权重
 
+  # 模型类型配置
+  model_type: "GraphRAG"
+  encoder_type: "bert"
+  encoder_name: "bert-base-chinese"
+  graph_hidden_channels: 256
+  use_node_types: true
+  use_edge_types: true
+  num_graph_layers: 2
+  node_type_embedding_dim: 32
+  edge_type_embedding_dim: 32
+  pool_ratio: 0.5
+
 # 损失函数配置
 loss:
   type: "combined"  # 损失函数类型 (contrastive, infonce, triplet, batch_contrastive, multi_positive, hard_negative_mining, combined)
-  temperature: 0.07  # 温度参数
+  temperature: 0.05  # 温度参数
   margin: 0.3  # 边界参数
   contrastive_weight: 1.0  # 对比损失权重
   triplet_weight: 0.5  # 三元组损失权重
   use_hard_negatives: true  # 是否使用硬负样本
   mining_strategy: "semi-hard"  # 挖掘策略 (hard, semi-hard, distance)
+  contrastive_loss_weight: 1.0
+  graph_loss_weight: 0.1
 
 # 优化器配置
 optimizer:
-  lr: 2.0e-5  # 学习率
-  weight_decay: 0.01  # 权重衰减
+  lr: 1.0e-4  # 学习率
+  weight_decay: 1.0e-5  # 权重衰减
   min_lr: 1.0e-6  # 最小学习率
 
 # 训练配置
 training:
-  num_epochs: 20  # 训练周期数
-  gradient_accumulation_steps: 1  # 梯度累积步数
+  num_epochs: 2  # 训练周期数
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  gradient_accumulation_steps: 4  # 梯度累积步数
   max_grad_norm: 1.0  # 梯度裁剪阈值
-  warmup_ratio: 0.1  # 预热比例
+  warmup_steps: 100
+  logging_steps: 50
+  evaluation_steps: 200
+  save_steps: 500  # 保存步数
   mixed_precision: true  # 是否使用混合精度训练
   save_state: true  # 是否保存训练状态
   
   # 评估配置
   eval_steps: 100  # 评估步数
-  save_steps: 500  # 保存步数
   validation:
     frequency: 1  # 验证频率（每N轮）
     metrics: ["loss", "accuracy"]  # 验证指标
@@ -107,4 +129,22 @@ logging:
     enabled: true
     path: "logs"
     max_size: 100  # MB
-    backup_count: 5 
+    backup_count: 5
+
+# 输出配置
+output:
+  model_dir: "models/test_run"
+  tensorboard_dir: "logs/tensorboard/test_run"
+  
+# 调试配置
+debug:
+  verbose: true
+  save_training_state: true
+
+# 数据子集配置
+data:
+  train_data_path: "datasets/full_dataset/train.pt"
+  val_data_path: "datasets/full_dataset/val.pt"
+  test_data_path: "datasets/full_dataset/test.pt"
+  cache_dir: "cache"
+  max_token_length: 512 

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 # --------------------------------------------------------
-# @Author : ${1:kkutysllb
+# @Author : kkutysllb
 # @E-mail : libing1@sn.chinamobile.com, 31468130@qq.com
 # @Date   : 2025-03-15 09:49
 # @Desc   : Training module for the RAG model.
@@ -147,44 +147,34 @@ class Trainer(LoggerMixin):
             if not batch:
                 continue
                 
-            # Move batch to device
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            node_features = batch['node_features'].to(self.device)
-            edge_features = batch['edge_features'].to(self.device)
-            edge_index = batch['edge_index'].to(self.device)
-            batch_idx = batch.get('batch', None)
-            if batch_idx is not None:
-                batch_idx = batch_idx.to(self.device)
+            # 处理批次数据
+            text_encodings = batch['text_encodings']
+            input_ids = text_encodings['input_ids'].to(self.device)
+            attention_mask = text_encodings['attention_mask'].to(self.device)
             
-            # 处理token_type_ids（如果存在）
-            token_type_ids = batch.get('token_type_ids', None)
-            if token_type_ids is not None:
-                token_type_ids = token_type_ids.to(self.device)
-                
-            # 创建边特征字典（简化版，实际应用中应该从数据中提取）
-            edge_indices_dict = {'default': edge_index}
-            edge_features_dict = {'default': edge_features}
-                
-            # Forward pass
-            outputs = self.model(
+            node_features = batch['node_features'].to(self.device)
+            edge_index = batch['edge_index'].to(self.device)
+            edge_features = batch['edge_features'].to(self.device)
+            
+            # 前向传播
+            text_embeddings, graph_embeddings = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
                 node_features=node_features,
-                edge_indices_dict=edge_indices_dict,
-                edge_features_dict=edge_features_dict,
-                batch=batch_idx
+                edge_index=edge_index,
+                edge_features=edge_features
             )
             
-            # Compute loss
+            # 计算损失
             loss_dict = self.loss_fn(
-                text_embeddings=outputs['text_embedding'],
-                graph_embeddings=outputs['graph_embedding']
+                text_embeddings=text_embeddings,
+                graph_embeddings=graph_embeddings
             )
             
             loss = loss_dict['loss']
-            accuracy = loss_dict['accuracy']
+            
+            # 获取准确率指标
+            accuracy = (loss_dict.get('text_to_graph_acc', 0.0) + loss_dict.get('graph_to_text_acc', 0.0)) / 2
             
             # Backward pass
             self.optimizer.zero_grad()
@@ -208,13 +198,13 @@ class Trainer(LoggerMixin):
                     
             # Update metrics
             total_loss += loss.item()
-            total_accuracy += accuracy.item()
+            total_accuracy += accuracy
             num_batches += 1
             
             # Update progress bar
             pbar.set_postfix({
                 'loss': loss.item(),
-                'accuracy': accuracy.item(),
+                'accuracy': accuracy,
                 'lr': get_lr(self.optimizer)
             })
             
@@ -232,7 +222,6 @@ class Trainer(LoggerMixin):
             'accuracy': avg_accuracy
         }
         
-    @torch.no_grad()
     def validate(self) -> Dict[str, float]:
         """Validate the model"""
         self.model.eval()
@@ -240,63 +229,54 @@ class Trainer(LoggerMixin):
         total_accuracy = 0
         num_batches = 0
         
-        pbar = tqdm(self.val_loader, desc="Validating")
-        for batch in pbar:
-            # 检查批次是否为空
-            if not batch:
-                continue
+        with torch.no_grad():
+            pbar = tqdm(self.val_loader, desc="Validating")
+            for batch in pbar:
+                # 检查批次是否为空
+                if not batch:
+                    continue
+                    
+                # 处理批次数据
+                text_encodings = batch['text_encodings']
+                input_ids = text_encodings['input_ids'].to(self.device)
+                attention_mask = text_encodings['attention_mask'].to(self.device)
                 
-            # Move batch to device
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            node_features = batch['node_features'].to(self.device)
-            edge_features = batch['edge_features'].to(self.device)
-            edge_index = batch['edge_index'].to(self.device)
-            batch_idx = batch.get('batch', None)
-            if batch_idx is not None:
-                batch_idx = batch_idx.to(self.device)
-            
-            # 处理token_type_ids（如果存在）
-            token_type_ids = batch.get('token_type_ids', None)
-            if token_type_ids is not None:
-                token_type_ids = token_type_ids.to(self.device)
+                node_features = batch['node_features'].to(self.device)
+                edge_index = batch['edge_index'].to(self.device)
+                edge_features = batch['edge_features'].to(self.device)
                 
-            # 创建边特征字典（简化版，实际应用中应该从数据中提取）
-            edge_indices_dict = {'default': edge_index}
-            edge_features_dict = {'default': edge_features}
+                # 前向传播
+                text_embeddings, graph_embeddings = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    node_features=node_features,
+                    edge_index=edge_index,
+                    edge_features=edge_features
+                )
                 
-            # Forward pass
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                node_features=node_features,
-                edge_indices_dict=edge_indices_dict,
-                edge_features_dict=edge_features_dict,
-                batch=batch_idx
-            )
-            
-            # Compute loss
-            loss_dict = self.loss_fn(
-                text_embeddings=outputs['text_embedding'],
-                graph_embeddings=outputs['graph_embedding']
-            )
-            
-            loss = loss_dict['loss']
-            accuracy = loss_dict['accuracy']
-            
-            # Update metrics
-            total_loss += loss.item()
-            total_accuracy += accuracy.item()
-            num_batches += 1
-            
-            # Update progress bar
-            pbar.set_postfix({
-                'loss': loss.item(),
-                'accuracy': accuracy.item()
-            })
-            
-        # Compute epoch metrics
+                # 计算损失
+                loss_dict = self.loss_fn(
+                    text_embeddings=text_embeddings,
+                    graph_embeddings=graph_embeddings
+                )
+                
+                loss = loss_dict['loss']
+                
+                # 获取准确率
+                accuracy = (loss_dict.get('text_to_graph_acc', 0.0) + loss_dict.get('graph_to_text_acc', 0.0)) / 2
+                
+                # 更新指标
+                total_loss += loss.item()
+                total_accuracy += accuracy
+                num_batches += 1
+                
+                # 更新进度条
+                pbar.set_postfix({
+                    'loss': loss.item(),
+                    'accuracy': accuracy
+                })
+        
+        # 计算平均指标
         avg_loss = total_loss / num_batches
         avg_accuracy = total_accuracy / num_batches
         

@@ -21,6 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from typing import Dict, Optional, Any
+from transformers import BertTokenizer
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -158,53 +159,22 @@ class TrainingManager:
         logger.info("训练环境设置完成")
     
     def _setup_data(self) -> None:
-        """设置数据集和数据加载器"""
-        data_config = self.config.get('data', {})
-        dataset_path = data_config.get('dataset_path', 'datasets/full_dataset')
+        """设置训练数据"""
+        # 调用加载数据方法
+        self.load_data()
         
-        logger.info(f"从 {dataset_path} 加载数据集...")
+        # 获取数据集大小
+        train_size = len(self.train_dataset)
+        val_size = len(self.val_dataset)
+        test_size = len(self.test_dataset)
         
-        # 加载数据集配置
-        dataset_stats = torch.load(os.path.join(dataset_path, 'dataset_stats.pt'))
-        dataset_config = dataset_stats['config']
-            
-        logger.info(f"数据集配置: {dataset_config}")
+        # 输出数据集信息
+        logger.info(f"数据集大小: 训练集={train_size}, 验证集={val_size}, 测试集={test_size}")
         
-        # 创建数据集
-        train_dataset = GraphTextDataset.load(
-            os.path.join(dataset_path, 'train.pt')
-        )
-        val_dataset = GraphTextDataset.load(
-            os.path.join(dataset_path, 'val.pt')
-        )
-        
-        # 确保数据集有collate_fn方法
-        if not hasattr(train_dataset, 'collate_fn'):
-            train_dataset.collate_fn = GraphTextDataset.collate_fn
-        if not hasattr(val_dataset, 'collate_fn'):
-            val_dataset.collate_fn = GraphTextDataset.collate_fn
-        
-        # 创建数据加载器
-        self.train_loader = DataLoader(
-            train_dataset,
-            batch_size=data_config.get('batch_size', 32),
-            shuffle=True,
-            num_workers=data_config.get('num_workers', 4),
-            pin_memory=True,
-            collate_fn=train_dataset.collate_fn
-        )
-        
-        self.val_loader = DataLoader(
-            val_dataset,
-            batch_size=data_config.get('batch_size', 32),
-            shuffle=False,
-            num_workers=data_config.get('num_workers', 4),
-            pin_memory=True,
-            collate_fn=val_dataset.collate_fn
-        )
-        
-        logger.info(f"训练数据集大小: {len(train_dataset)}")
-        logger.info(f"验证数据集大小: {len(val_dataset)}")
+        # 保存数据加载器以便后续使用
+        self.train_loader = self.train_loader
+        self.val_loader = self.val_loader
+        self.test_loader = self.test_loader
     
     def _setup_model(self) -> None:
         """设置模型"""
@@ -218,8 +188,6 @@ class TrainingManager:
             time_series_dim=model_config.get('time_series_dim', 32),
             hidden_dim=model_config.get('hidden_dim', 256),
             output_dim=model_config.get('output_dim', 768),
-            num_layers=model_config.get('num_layers', 2),
-            num_heads=model_config.get('num_heads', 8),
             dropout=model_config.get('dropout', 0.1),
             freeze_text=model_config.get('freeze_text', False),
             node_types=model_config.get('node_types', ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"]),
@@ -309,21 +277,21 @@ class TrainingManager:
         
         # 绘制损失
         plt.subplot(2, 1, 1)
-        plt.plot(history['train_loss'], 'b-', label='训练损失')
-        plt.plot(history['val_loss'], 'r-', label='验证损失')
-        plt.title('训练和验证损失')
-        plt.xlabel('周期')
-        plt.ylabel('损失')
+        plt.plot(history['train_loss'], 'b-', label='train loss')
+        plt.plot(history['val_loss'], 'r-', label='val loss')
+        plt.title('train and val loss')
+        plt.xlabel('epoch')
+        plt.ylabel('loss')
         plt.legend()
         plt.grid(True)
         
         # 绘制准确率
         plt.subplot(2, 1, 2)
-        plt.plot(history['train_accuracy'], 'b-', label='训练准确率')
-        plt.plot(history['val_accuracy'], 'r-', label='验证准确率')
-        plt.title('训练和验证准确率')
-        plt.xlabel('周期')
-        plt.ylabel('准确率')
+        plt.plot(history['train_accuracy'], 'b-', label='train accuracy')
+        plt.plot(history['val_accuracy'], 'r-', label='val accuracy')
+        plt.title('train and val accuracy')
+        plt.xlabel('epoch')
+        plt.ylabel('accuracy')
         plt.legend()
         plt.grid(True)
         
@@ -381,6 +349,92 @@ class TrainingManager:
         logger.addHandler(file_handler)
         
         logger.info(f"日志文件保存在: {log_file}")
+
+    def load_data(self):
+        """加载训练、验证和测试数据"""
+        logger.info("加载数据...")
+        
+        # 获取数据路径
+        data_config = self.config.get("data", {})
+        train_data_path = data_config.get("train_data_path", "datasets/full_dataset/train.pt")
+        val_data_path = data_config.get("val_data_path", "datasets/full_dataset/val.pt")
+        test_data_path = data_config.get("test_data_path", "datasets/full_dataset/test.pt")
+        
+        # 确保data_config中包含必要的配置项
+        model_config = self.config.get('model', {})
+        data_config['node_types'] = model_config.get('node_types', ["DC", "TENANT", "NE", "VM", "HOST", "HA", "TRU"])
+        data_config['edge_types'] = model_config.get('edge_types', ["DC_TO_TENANT", "TENANT_TO_NE", "NE_TO_VM", "VM_TO_HOST", "HOST_TO_HA", "HA_TO_TRU"])
+        data_config['max_text_length'] = data_config.get('max_text_length', 512)
+        data_config['max_node_size'] = data_config.get('max_node_size', 100)
+        data_config['max_edge_size'] = data_config.get('max_edge_size', 200)
+        
+        # 加载训练数据
+        logger.info(f"加载训练数据: {train_data_path}")
+        train_data = torch.load(train_data_path, weights_only=False)
+        self.train_dataset = GraphTextDataset.from_samples(train_data['pairs'], data_config)
+        
+        # 加载验证数据
+        logger.info(f"加载验证数据: {val_data_path}")
+        val_data = torch.load(val_data_path, weights_only=False)
+        self.val_dataset = GraphTextDataset.from_samples(val_data['pairs'], data_config)
+        
+        # 加载测试数据
+        logger.info(f"加载测试数据: {test_data_path}")
+        test_data = torch.load(test_data_path, weights_only=False)
+        self.test_dataset = GraphTextDataset.from_samples(test_data['pairs'], data_config)
+        
+        # 检查是否使用数据子集进行测试
+        use_subset = data_config.get("use_subset", False)
+        if use_subset:
+            subset_size = data_config.get("subset_size", 100)
+            logger.info(f"使用子集数据进行测试: {subset_size}个样本")
+            
+            # 确保子集大小不超过原始数据集大小
+            train_subset_size = min(subset_size, len(self.train_dataset))
+            val_subset_size = min(subset_size, len(self.val_dataset))
+            test_subset_size = min(subset_size, len(self.test_dataset))
+            
+            # 创建数据子集
+            self.train_dataset.pairs = self.train_dataset.pairs[:train_subset_size]
+            self.val_dataset.pairs = self.val_dataset.pairs[:val_subset_size]
+            self.test_dataset.pairs = self.test_dataset.pairs[:test_subset_size]
+            
+            logger.info(f"训练子集大小: {len(self.train_dataset)}")
+            logger.info(f"验证子集大小: {len(self.val_dataset)}")
+            logger.info(f"测试子集大小: {len(self.test_dataset)}")
+        
+        # 创建数据加载器
+        batch_size = data_config.get("batch_size", 32)
+        num_workers = data_config.get("num_workers", 4)
+        
+        self.train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=GraphTextDataset.collate_fn
+        )
+        
+        self.val_loader = DataLoader(
+            self.val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=GraphTextDataset.collate_fn
+        )
+        
+        self.test_loader = DataLoader(
+            self.test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=GraphTextDataset.collate_fn
+        )
+        
+        logger.info(f"原始数据统计: 训练集={len(self.train_dataset)}, "
+                     f"验证集={len(self.val_dataset)}, "
+                     f"测试集={len(self.test_dataset)}")
+        logger.info(f"创建数据加载器 (batch_size={batch_size}, workers={num_workers})")
 
 def main():
     """主函数"""

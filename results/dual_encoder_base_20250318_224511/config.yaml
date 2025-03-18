@@ -1,0 +1,79 @@
+data:
+  cache_dir: cache
+  max_token_length: 512
+  test_data_path: datasets/full_dataset/test.pt
+  train_data_path: datasets/full_dataset/train.pt
+  val_data_path: datasets/full_dataset/val.pt
+debug:
+  save_training_state: true
+  verbose: true
+experiment_name: dual_encoder_base
+logging:
+  file:
+    backup_count: 5
+    enabled: true
+    max_size: 100
+    path: logs
+  level: INFO
+  log_steps: 10
+  tensorboard: true
+loss:
+  contrastive_loss_weight: 1.0
+  contrastive_weight: 1.0
+  graph_loss_weight: 0.1
+  margin: 0.3
+  mining_strategy: semi-hard
+  temperature: 0.05
+  triplet_weight: 0.5
+  type: combined
+  use_hard_negatives: true
+model:
+  dropout: 0.2
+  edge_type_embedding_dim: 32
+  encoder_name: bert-base-chinese
+  encoder_type: bert
+  graph_hidden_channels: 256
+  graph_hidden_dim: 256
+  graph_num_layers: 2
+  init_weights: true
+  model_type: GraphRAG
+  node_type_embedding_dim: 32
+  num_graph_layers: 2
+  pool_ratio: 0.5
+  pretrained: true
+  projection_dim: 768
+  save_best_only: true
+  save_last: true
+  text_encoder_name: bert-base-chinese
+  text_pooling_strategy: cls
+  use_edge_types: true
+  use_node_types: true
+optimizer:
+  lr: 0.0001
+  min_lr: 1.0e-06
+  weight_decay: 1.0e-05
+output:
+  model_dir: models/test_run
+  tensorboard_dir: logs/tensorboard/test_run
+seed: 42
+training:
+  early_stopping:
+    min_delta: 0.001
+    patience: 3
+  eval_steps: 100
+  evaluation_steps: 200
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0001
+  logging_steps: 50
+  max_grad_norm: 1.0
+  mixed_precision: true
+  num_epochs: 2
+  save_state: true
+  save_steps: 500
+  validation:
+    frequency: 1
+    metrics:
+    - loss
+    - accuracy
+  warmup_steps: 100
+  weight_decay: 1.0e-05
