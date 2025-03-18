@@ -107,3 +107,17 @@ datasets/
 **/edge_dynamics_intermediate.json
 **/graph_data_complete.json
 **/graph_data_with_metrics.json
+
+# Cache and logs
+cache/
+.pytest_cache/
+
+# Sensitive information
+*.pem
+*.key
+
+# Docker
+.dockerignore
+
+# System files
+.directory

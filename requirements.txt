@@ -1,39 +1,28 @@
-# Core dependencies
+# Agno 多智能体协同解决方案依赖
+
+# Web框架
+fastapi>=0.95.0
+uvicorn>=0.22.0
+pydantic>=2.0.0
+httpx>=0.24.0
+
+# 数据库连接
+py2neo>=2021.2.3
+pymilvus>=2.3.0
+
+# 机器学习和图嵌入
+torch>=2.0.0
 numpy>=1.24.0
-pandas>=2.0.0
-networkx>=3.0.0
-matplotlib>=3.7.0
-neo4j>=5.8.0
-pyyaml>=6.0.0
-requests>=2.25.0
-tqdm>=4.65.0
+sentence-transformers>=2.2.2
 
-# Excel handling
-openpyxl>=3.0.0
-xlrd>=2.0.0
+# LLM和工具
+openai>=0.27.0
+vllm>=0.2.0
+huggingface-hub>=0.16.0
 
-# Utilities
-python-dotenv==1.0.0
-colorama>=0.4.4
-pytz>=2021.1
+# 日志和监控
+prometheus-fastapi-instrumentator>=5.9.1
+json-log-formatter>=0.5.0
 
-# Graph and LLM dependencies
-py2neo>=2021.2.4
-langchain>=0.1.0
-langchain-community>=0.0.10
-langchain-core>=0.1.0
-langchain-openai>=0.0.10
-openai>=1.0.0
-
-# Added from the code block
-torch>=2.3.0
-torch-geometric>=2.3.0
-transformers>=4.30.0
-faiss-cpu>=1.7.0
-scikit-learn>=1.2.0
-seaborn>=0.11.0
-pytest>=6.2.0
-black>=22.3.0
-isort>=5.10.0
-flake8>=4.0.0
-mypy>=0.950 
+# 工具库
+python-dotenv>=1.0.0 
