@@ -764,7 +764,7 @@ class GraphTextDataset(Dataset, LoggerMixin):
         return details
     
     def _add_ha_specific_details(self, features: Dict) -> str:
-        """添加高可用集群特定的详细信息到描述中"""
+        """添加高可用主机组集群特定的详细信息到描述中"""
         details = ""
         
         # 添加高可用集群特定信息

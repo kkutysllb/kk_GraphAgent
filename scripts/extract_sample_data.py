@@ -14,11 +14,12 @@
 业务链：DC -> TENANT -> NE -> VM
 资源链：VM -> HOST -> HA -> TRU
 """
-
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 from neo4j import GraphDatabase
 from typing import Dict, List
-import os
 from datetime import datetime
 from rag.utils.config import get_database_config
 
